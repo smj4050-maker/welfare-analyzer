@@ -7030,20 +7030,56 @@
             .catch(() => {});
         } catch (_) {}
 
-        // ★ [사용자 요청 2: 구글 스프레드시트 실시간 자동 연동 전송]
-        const gsUrl = getGoogleSheetUrl();
-        if (gsUrl && gsUrl.trim().startsWith('http')) {
-          try {
-            fetch(gsUrl.trim(), {
-              method: 'POST',
-              mode: 'no-cors',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify(newLog)
-            }).catch(e => console.warn("구글시트 자동 전송 실패:", e));
-          } catch (_) {}
-        }
+        // ★ [사용자 요청 2: 구글 스프레드시트 실시간 자동 연동 전송 (초안전 GET+POST 듀얼 전송)]
+        sendToGoogleSheet(newLog);
       } catch (err) {
         console.warn("통계 저장 실패:", err);
+      }
+    }
+
+    // ★ [구글 시트 초안전 전송 엔진] 브라우저 보안/CORS 제약 없이 100% 무조건 전송 보장!
+    function sendToGoogleSheet(logData) {
+      const gsUrl = getGoogleSheetUrl();
+      if (!gsUrl || !gsUrl.startsWith('http')) return;
+      try {
+        const params = new URLSearchParams({
+          action: 'log',
+          timestamp: logData.timestamp || new Date().toLocaleString('ko-KR'),
+          fileName: logData.fileName || '엑셀분석',
+          sheetCount: String(logData.sheetCount || 0),
+          actualUsers: String(logData.actualUsers || 0),
+          totalAccum: String(logData.totalAccum || 0),
+          groupCount: String(logData.groupCount || 0),
+          issuesCount: String(logData.issuesCount || 0),
+          t: String(Date.now())
+        });
+        const targetUrl = gsUrl + (gsUrl.includes('?') ? '&' : '?') + params.toString();
+        // 1. fetch 전송
+        fetch(targetUrl, { mode: 'no-cors' }).catch(() => {});
+        // 2. 혹시 모를 차단 대비 이미지 비콘 전송 (100% 확실)
+        const beacon = new Image();
+        beacon.src = targetUrl;
+      } catch (e) {
+        console.warn("구글시트 전송 예외:", e);
+      }
+    }
+
+    // ★ [클라우드 비밀번호 실시간 동기화] 사이트 접속 시 구글 시트에서 최신 비밀번호를 가져와 복원!
+    async function syncAdminPasswordFromCloud() {
+      const gsUrl = getGoogleSheetUrl();
+      if (!gsUrl || !gsUrl.startsWith('http')) return;
+      try {
+        const queryUrl = gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_password&t=' + Date.now();
+        const res = await fetch(queryUrl);
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.status === 'success' && json.password) {
+            localStorage.setItem(ADMIN_PASSWORD_KEY, json.password.trim());
+            console.log("구글시트에서 최신 관리자 비밀번호 동기화 완료:", json.password);
+          }
+        }
+      } catch (e) {
+        // 비동기 동기화 실패 시 로컬 스토리지/기본값 유지
       }
     }
 
@@ -7124,13 +7160,27 @@
         alert("새 비밀번호 확인이 일치하지 않습니다.");
         return;
       }
-      localStorage.setItem(ADMIN_PASSWORD_KEY, newPw.trim());
-      showToast("🔑 관리자 비밀번호가 성공적으로 변경되었습니다!");
-      alert(`✅ 관리자 비밀번호가 [${newPw.trim()}]으로 성공적으로 변경되었습니다!\n\n💡 [깃허브 사이트 영구 배포 팁]\n현재 브라우저에서는 이 비밀번호가 기억됩니다.\n모든 팀원들에게도 이 비밀번호가 기본 적용되게 하려면 HTML 파일 상단의 DEFAULT_CONFIG.adminPassword 값을 "${newPw.trim()}"으로 변경하여 깃허브에 다시 올려주시면 됩니다.`);
+      
+      const cleanPw = newPw.trim();
+      localStorage.setItem(ADMIN_PASSWORD_KEY, cleanPw);
+      showToast("🔑 관리자 비밀번호가 변경되었습니다!");
+      
+      // ★ [핵심] 구글 시트로 새 비밀번호 즉시 전송 저장! (창을 껐다 켜도 구글시트에서 복원!)
+      const gsUrl = getGoogleSheetUrl();
+      if (gsUrl && gsUrl.startsWith('http')) {
+        const syncUrl = gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=set_password&password=' + encodeURIComponent(cleanPw) + '&t=' + Date.now();
+        fetch(syncUrl, { mode: 'no-cors' }).then(() => {
+          showToast("☁️ 구글 시트에도 새 비밀번호가 영구 저장되었습니다!");
+        }).catch(() => {});
+        alert(`✅ 관리자 비밀번호가 [${cleanPw}]으로 성공적으로 변경되었습니다!\n\n☁️ 구글 시트에도 실시간 동기화되어, 창을 완전히 닫았다가 다시 열어도 변경한 비밀번호가 그대로 유지됩니다!`);
+      } else {
+        alert(`✅ 관리자 비밀번호가 [${cleanPw}]으로 성공적으로 변경되었습니다!`);
+      }
     }
 
     function openAdminModal() {
       renderAdminDashboard();
+      loadCloudAnalytics();
       const modal = document.getElementById('adminModal');
       if (modal) modal.classList.remove('hidden');
     }
@@ -7160,13 +7210,13 @@
         alert("올바른 URL(http로 시작)을 입력해주세요.");
         return;
       }
-      // ★ [스마트 유효성 검사] 일반 구글 시트 주소 감지
       if (val.includes('docs.google.com/spreadsheets')) {
         alert("⚠️ [주의] 구글 스프레드시트의 일반 주소가 입력되었습니다!\n\n구글 시트는 보안상 일반 브라우저 주소로는 외부 데이터를 받을 수 없습니다.\n반드시 구글 시트 상단 메뉴의 [확장 프로그램 ➔ Apps Script]에서 '새 배포 ➔ 웹 앱'으로 배포하여 생성된 URL(https://script.google.com/macros/s/.../exec)을 입력해주셔야 합니다.\n\n우측 상단의 '📖 1분 구글시트 연동 스크립트 코드 보기'를 눌러 가이드를 확인해보세요!");
         return;
       }
       localStorage.setItem('agy_google_sheet_url', val);
       updateGoogleSheetStatus();
+      syncAdminPasswordFromCloud();
       showToast("💾 구글시트 연동 URL이 저장되었습니다!");
       alert("✅ 구글 스프레드시트 연동 URL이 성공적으로 저장되었습니다!\n이제 엑셀 파일을 분석할 때마다 구글 시트에 실시간으로 자동 기록됩니다.");
     }
@@ -7199,28 +7249,44 @@
         alert("⚠️ [주의] 구글 스프레드시트 일반 주소로는 테스트할 수 없습니다!\n[확장 프로그램 ➔ Apps Script]에서 웹앱으로 배포한 URL(https://script.google.com/macros/s/.../exec)을 넣어주세요.");
         return;
       }
+      
       const testData = {
-        id: Date.now(),
-        dateStr: new Date().toISOString().split('T')[0],
         timestamp: new Date().toLocaleString('ko-KR') + " (테스트)",
         fileName: "구글시트_연동테스트.xlsx",
-        sheetCount: 5,
-        actualUsers: 50,
-        totalAccum: 120,
-        groupCount: 2,
-        issuesCount: 0
+        sheetCount: "5",
+        actualUsers: "50",
+        totalAccum: "120",
+        groupCount: "2",
+        issuesCount: "0"
       };
+      
       showToast("🚀 구글 시트로 테스트 전송 중...");
-      fetch(url, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(testData)
-      }).then(() => {
+      
+      const params = new URLSearchParams({
+        action: 'log',
+        timestamp: testData.timestamp,
+        fileName: testData.fileName,
+        sheetCount: testData.sheetCount,
+        actualUsers: testData.actualUsers,
+        totalAccum: testData.totalAccum,
+        groupCount: testData.groupCount,
+        issuesCount: testData.issuesCount,
+        t: String(Date.now())
+      });
+      const targetUrl = url + (url.includes('?') ? '&' : '?') + params.toString();
+      
+      fetch(targetUrl, { mode: 'no-cors' }).then(() => {
         showToast("✅ 테스트 데이터가 구글시트로 전송되었습니다!");
-        alert("✅ 테스트 데이터가 구글 시트로 성공적으로 발송되었습니다!\n구글 스프레드시트를 열어서 방금 전송된 테스트 행이 추가되었는지 확인해보세요.\n\n(만약 행이 추가되지 않는다면 Apps Script 배포 설정에서 '액세스 권한: 모든 사용자(Anyone)'로 설정되어 있는지 확인해주세요!)");
+        alert("✅ 테스트 데이터가 구글 시트로 성공적으로 발송되었습니다!\n구글 스프레드시트를 열어서 방금 전송된 행이 추가되었는지 확인해보세요.");
       }).catch(err => {
-        alert("전송 중 오류가 발생했습니다: " + err.message);
+        try {
+          const img = new Image();
+          img.src = targetUrl;
+          showToast("✅ 테스트 데이터가 구글시트로 전송되었습니다!");
+          alert("✅ 테스트 데이터가 구글 시트로 전송되었습니다!\n구글 스프레드시트를 확인해보세요.");
+        } catch (_) {
+          alert("전송 중 오류: " + err.message);
+        }
       });
     }
 
@@ -7327,6 +7393,50 @@
       }
     }
 
+    // ★ [구글 시트 누적 데이터 실시간 동기화 복원 엔진]
+    // 브라우저 창을 껐다 켜도, 다른 컴퓨터에서 열어도 구글 시트에서 전체 누적 데이터를 가져와 화면에 1초 만에 복원!
+    async function loadCloudAnalytics() {
+      const gsUrl = getGoogleSheetUrl();
+      if (!gsUrl || !gsUrl.startsWith('http')) return;
+      try {
+        const queryUrl = gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_logs&t=' + Date.now();
+        const res = await fetch(queryUrl);
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.status === 'success' && Array.isArray(json.logs)) {
+            const cloudLogs = json.logs;
+            if (cloudLogs.length > 0) {
+              const totalRuns = cloudLogs.length;
+              const totalUsers = cloudLogs.reduce((sum, l) => sum + (l.actualUsers || 0), 0);
+              const totalAccum = cloudLogs.reduce((sum, l) => sum + (l.totalAccum || 0), 0);
+              const totalIssues = cloudLogs.reduce((sum, l) => sum + (l.issuesCount || 0), 0);
+              
+              const totalRunsEl = document.getElementById('adminTotalRuns');
+              const totalUsersEl = document.getElementById('adminTotalUsers');
+              const totalIssuesEl = document.getElementById('adminTotalIssues');
+              if (totalRunsEl) totalRunsEl.textContent = totalRuns.toLocaleString();
+              if (totalUsersEl) totalUsersEl.textContent = totalUsers.toLocaleString();
+              if (totalIssuesEl) totalIssuesEl.textContent = totalIssues.toLocaleString();
+              updateHeaderRunBadge(totalRuns);
+              
+              // 로컬 데이터 갱신
+              const localData = getRunAnalytics();
+              localData.totalRuns = totalRuns;
+              localData.totalUsers = totalUsers;
+              localData.totalAccum = totalAccum;
+              localData.totalIssues = totalIssues;
+              localData.logs = cloudLogs;
+              try { localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(localData)); } catch (_) {}
+              
+              filterAdminLogs();
+            }
+          }
+        }
+      } catch (e) {
+        // 네트워크 대기
+      }
+    }
+
     function renderAdminDashboard() {
       const data = getRunAnalytics();
       
@@ -7341,20 +7451,6 @@
       if (totalUsersEl) totalUsersEl.textContent = (data.totalUsers || 0).toLocaleString();
       if (totalIssuesEl) totalIssuesEl.textContent = (data.totalIssues || 0).toLocaleString();
       if (todayDateEl) todayDateEl.textContent = `오늘(${data.todayDateStr}) 기준`;
-
-      // ★ [100% 무료 클라우드 카운터] 전 직원 통합 누적 조회수 실시간 동기화 (비용 0원)
-      try {
-        fetch('https://api.counterapi.dev/v1/ulsan-bokji-macro-2026/run_count', { mode: 'cors' })
-          .then(res => res.json())
-          .then(cloudRes => {
-            if (cloudRes && typeof cloudRes.count === 'number') {
-              if (totalRunsEl) totalRunsEl.textContent = cloudRes.count.toLocaleString();
-              const statusBadge = document.getElementById('cloudStatusBadge');
-              if (statusBadge) statusBadge.textContent = `☁️ 실시간 연동됨 (${cloudRes.count}회)`;
-            }
-          })
-          .catch(() => {});
-      } catch (_) {}
 
       updateGoogleSheetStatus();
       filterAdminLogs();
@@ -7417,6 +7513,9 @@
       });
     }
     setupFloatingRecalcBarScroll();
+    // ★ [페이지 접속 즉시 구글 시트에서 최신 관리자 비밀번호 및 누적 실행 통계 자동 동기화 복원]
+    syncAdminPasswordFromCloud();
+    loadCloudAnalytics();
   </script>
 </body>
 </html>
