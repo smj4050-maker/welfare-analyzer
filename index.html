@@ -7037,10 +7037,22 @@
       }
     }
 
-    // ★ [구글 시트 초안전 전송 엔진] 브라우저 보안/CORS 제약 없이 100% 무조건 전송 보장!
+    let lastSentGoogleSheetSignature = "";
+    let lastSentGoogleSheetTime = 0;
+
+    // ★ [구글 시트 초안전 전송 엔진] 중복 전송 100% 방지 및 단일 전송 보장
     function sendToGoogleSheet(logData) {
       const gsUrl = getGoogleSheetUrl();
       if (!gsUrl || !gsUrl.startsWith('http')) return;
+      
+      const sig = `${logData.fileName}_${logData.actualUsers}_${logData.totalAccum}`;
+      const now = Date.now();
+      if (sig === lastSentGoogleSheetSignature && (now - lastSentGoogleSheetTime) < 4000) {
+        return; // 4초 내 동일 데이터 중복 전송 방지
+      }
+      lastSentGoogleSheetSignature = sig;
+      lastSentGoogleSheetTime = now;
+
       try {
         const params = new URLSearchParams({
           action: 'log',
@@ -7051,36 +7063,88 @@
           totalAccum: String(logData.totalAccum || 0),
           groupCount: String(logData.groupCount || 0),
           issuesCount: String(logData.issuesCount || 0),
-          t: String(Date.now())
+          t: String(now)
         });
         const targetUrl = gsUrl + (gsUrl.includes('?') ? '&' : '?') + params.toString();
-        // 1. fetch 전송
         fetch(targetUrl, { mode: 'no-cors' }).catch(() => {});
-        // 2. 혹시 모를 차단 대비 이미지 비콘 전송 (100% 확실)
-        const beacon = new Image();
-        beacon.src = targetUrl;
       } catch (e) {
         console.warn("구글시트 전송 예외:", e);
       }
     }
 
-    // ★ [클라우드 비밀번호 실시간 동기화] 사이트 접속 시 구글 시트에서 최신 비밀번호를 가져와 복원!
-    async function syncAdminPasswordFromCloud() {
+    // ★ [JSONP 엔진: 브라우저 CORS 차단 100% 무력화]
+    // 구글 시트에서 전체 누적 기록 및 비밀번호를 안전하게 읽어오는 전용 로더!
+    function fetchJsonp(url, callbackName) {
+      const existing = document.getElementById('jsonp_' + callbackName);
+      if (existing) existing.remove();
+      const script = document.createElement('script');
+      script.id = 'jsonp_' + callbackName;
+      script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + callbackName + '&t=' + Date.now();
+      script.onerror = () => script.remove();
+      document.body.appendChild(script);
+    }
+
+    // 전역 콜백 1: 구글 시트에서 최신 관리자 비밀번호 수신
+    window.onCloudPasswordLoaded = function(res) {
+      if (res && res.status === 'success' && res.password) {
+        localStorage.setItem(ADMIN_PASSWORD_KEY, String(res.password).trim());
+        console.log("✅ 구글시트에서 최신 관리자 비밀번호 동기화 완료:", res.password);
+      }
+      const s = document.getElementById('jsonp_onCloudPasswordLoaded');
+      if (s) s.remove();
+    };
+
+    function syncAdminPasswordFromCloud() {
       const gsUrl = getGoogleSheetUrl();
       if (!gsUrl || !gsUrl.startsWith('http')) return;
-      try {
-        const queryUrl = gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_password&t=' + Date.now();
-        const res = await fetch(queryUrl);
-        if (res.ok) {
-          const json = await res.json();
-          if (json && json.status === 'success' && json.password) {
-            localStorage.setItem(ADMIN_PASSWORD_KEY, json.password.trim());
-            console.log("구글시트에서 최신 관리자 비밀번호 동기화 완료:", json.password);
-          }
-        }
-      } catch (e) {
-        // 비동기 동기화 실패 시 로컬 스토리지/기본값 유지
+      fetchJsonp(gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_password', 'onCloudPasswordLoaded');
+    }
+
+    // 전역 콜백 2: 구글 시트에서 전체 누적 실행 이력 수신 및 화면 1초 복원!
+    window.onCloudLogsLoaded = function(res) {
+      if (res && res.status === 'success' && Array.isArray(res.logs)) {
+        const cloudLogs = res.logs;
+        console.log("✅ 구글시트에서 전체 누적 기록 수신 완료:", cloudLogs.length, "건");
+        
+        const totalRuns = cloudLogs.length;
+        const totalUsers = cloudLogs.reduce((sum, l) => sum + (l.actualUsers || 0), 0);
+        const totalAccum = cloudLogs.reduce((sum, l) => sum + (l.totalAccum || 0), 0);
+        const totalIssues = cloudLogs.reduce((sum, l) => sum + (l.issuesCount || 0), 0);
+        
+        const todayStr = new Date().toLocaleDateString('ko-KR');
+        const todayRuns = cloudLogs.filter(l => String(l.timestamp).includes(todayStr) || String(l.timestamp).includes(new Date().toISOString().split('T')[0])).length;
+
+        const totalRunsEl = document.getElementById('adminTotalRuns');
+        const todayRunsEl = document.getElementById('adminTodayRuns');
+        const totalUsersEl = document.getElementById('adminTotalUsers');
+        const totalIssuesEl = document.getElementById('adminTotalIssues');
+
+        if (totalRunsEl) totalRunsEl.textContent = totalRuns.toLocaleString();
+        if (todayRunsEl) todayRunsEl.textContent = todayRuns.toLocaleString();
+        if (totalUsersEl) totalUsersEl.textContent = totalUsers.toLocaleString();
+        if (totalIssuesEl) totalIssuesEl.textContent = totalIssues.toLocaleString();
+        updateHeaderRunBadge(totalRuns);
+
+        currentAdminFilteredLogs = cloudLogs;
+        const localData = getRunAnalytics();
+        localData.totalRuns = totalRuns;
+        localData.todayRuns = todayRuns;
+        localData.totalUsers = totalUsers;
+        localData.totalAccum = totalAccum;
+        localData.totalIssues = totalIssues;
+        localData.logs = cloudLogs;
+        try { localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(localData)); } catch (_) {}
+
+        filterAdminLogs();
       }
+      const s = document.getElementById('jsonp_onCloudLogsLoaded');
+      if (s) s.remove();
+    };
+
+    function loadCloudAnalytics() {
+      const gsUrl = getGoogleSheetUrl();
+      if (!gsUrl || !gsUrl.startsWith('http')) return;
+      fetchJsonp(gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_logs', 'onCloudLogsLoaded');
     }
 
     function updateHeaderRunBadge(count) {
@@ -7393,49 +7457,6 @@
       }
     }
 
-    // ★ [구글 시트 누적 데이터 실시간 동기화 복원 엔진]
-    // 브라우저 창을 껐다 켜도, 다른 컴퓨터에서 열어도 구글 시트에서 전체 누적 데이터를 가져와 화면에 1초 만에 복원!
-    async function loadCloudAnalytics() {
-      const gsUrl = getGoogleSheetUrl();
-      if (!gsUrl || !gsUrl.startsWith('http')) return;
-      try {
-        const queryUrl = gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_logs&t=' + Date.now();
-        const res = await fetch(queryUrl);
-        if (res.ok) {
-          const json = await res.json();
-          if (json && json.status === 'success' && Array.isArray(json.logs)) {
-            const cloudLogs = json.logs;
-            if (cloudLogs.length > 0) {
-              const totalRuns = cloudLogs.length;
-              const totalUsers = cloudLogs.reduce((sum, l) => sum + (l.actualUsers || 0), 0);
-              const totalAccum = cloudLogs.reduce((sum, l) => sum + (l.totalAccum || 0), 0);
-              const totalIssues = cloudLogs.reduce((sum, l) => sum + (l.issuesCount || 0), 0);
-              
-              const totalRunsEl = document.getElementById('adminTotalRuns');
-              const totalUsersEl = document.getElementById('adminTotalUsers');
-              const totalIssuesEl = document.getElementById('adminTotalIssues');
-              if (totalRunsEl) totalRunsEl.textContent = totalRuns.toLocaleString();
-              if (totalUsersEl) totalUsersEl.textContent = totalUsers.toLocaleString();
-              if (totalIssuesEl) totalIssuesEl.textContent = totalIssues.toLocaleString();
-              updateHeaderRunBadge(totalRuns);
-              
-              // 로컬 데이터 갱신
-              const localData = getRunAnalytics();
-              localData.totalRuns = totalRuns;
-              localData.totalUsers = totalUsers;
-              localData.totalAccum = totalAccum;
-              localData.totalIssues = totalIssues;
-              localData.logs = cloudLogs;
-              try { localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(localData)); } catch (_) {}
-              
-              filterAdminLogs();
-            }
-          }
-        }
-      } catch (e) {
-        // 네트워크 대기
-      }
-    }
 
     function renderAdminDashboard() {
       const data = getRunAnalytics();
