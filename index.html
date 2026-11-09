@@ -4739,11 +4739,20 @@
         { label: "미확인", match: a => a === null || a === undefined || a < 0 }
       ];
 
+      // ★ [비고 '추정' 장애정도 정밀 분리: 경증 기재자 중 비고에 '추정'이 있으면 통계표의 '추정'으로 자동 집계!]
+      // 복지관 원본 시트에는 장애정도에 '중증'/'경증'만 있어 추정장애 이용자가 부득이 '경증'에 기재되지만,
+      // 비고란에 '추정'이 기재된 이용자는 통계표의 '추정' 행으로 정확히 분류 집계되어야 하며,
+      // 비고란에 '추정'이라는 단어가 들어가지 않는 순수 경증 대상자만 '경증' 행으로 집계됩니다 (실인원/연인원 공통)
+      const isEstimatedUser = u => (u.note && u.note.includes("추정")) || (u.participations && u.participations.some(p => p.note && p.note.includes("추정"))) || u.severity === "추정";
+      const isNonDisabledUser = u => !isEstimatedUser(u) && (u.severity === "비장애인" || u.mainDisability === "비장애인" || (u.disabilityCounts && (u.disabilityCounts["비장애인"] > 0 || u.disabilityCounts["비장애"] > 0)));
+      const isSevereUser = u => !isEstimatedUser(u) && !isNonDisabledUser(u) && (u.severity === "중증" || u.sevActual > 0 || u.sevAccum > 0);
+      const isMildUser = u => !isEstimatedUser(u) && !isNonDisabledUser(u) && !isSevereUser(u) && (u.severity === "경증" || u.mildActual > 0 || u.mildAccum > 0);
+
       const severityGroups = [
-        { label: "중증", match: u => u.severity === "중증" },
-        { label: "경증", match: u => u.severity === "경증" },
-        { label: "추정", match: u => u.severity === "추정" },
-        { label: "비장애인", match: u => u.severity === "비장애인" || u.mainDisability === "비장애인" }
+        { label: "중증", match: isSevereUser },
+        { label: "경증", match: isMildUser },
+        { label: "추정", match: isEstimatedUser },
+        { label: "비장애인", match: isNonDisabledUser }
       ];
 
       const isRecipientUser = u => (u.discount === "수급자" || (u.recActual > 0 || u.recAccum > 0));
