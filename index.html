@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>이용자현황 분석기 | 제작,배포 기획홍보팀 송민정</title>
+  <!-- ★ [영구 기본 환경 설정] 로컬 스토리지가 초기화되거나 브라우저를 다시 열어도 절대 리셋되지 않는 영구 기본값 -->
+  <script>
+    const DEFAULT_CONFIG = {
+      adminPassword: "0000",
+      googleSheetUrl: "https://script.google.com/macros/s/AKfycbzYINS_VYBciLgDUtSosj-IxoNEO2pksq5H0UkAp-hPlTOcPv_dd41h5l1UbBW2US0wDA/exec"
+    };
+  </script>
   <!-- 전역 스크립트 에러 감지 및 즉시 알림 핸들러 -->
   <script>
     window.onerror = function(msg, url, line, col, error) {
@@ -1386,8 +1393,22 @@
         const regNo = String(r[1] !== undefined ? r[1] : "").trim();
         const name = String(r[2] !== undefined ? r[2] : "").trim();
 
-        if (no === "계" || regNo === "계" || name === "계") break;
+        // ★ [핵심 개선] 계 행이 나오더라도 break하지 않고 continue! (올망졸망1 아래의 올망졸망2 등 다중 표 모두 연속 인식!)
+        const isFooterRow = (no === "계" || regNo === "계" || name === "계" || r.slice(0, 5).some(c => String(c || '').trim() === "계"));
+        if (isFooterRow) continue;
+
+        // 빈 행 또는 계 행 다음의 연인원 요약 행 건너뛰기
         if (!regNo && !name) continue;
+
+        // 하위 프로그램 제목 및 중간 헤더 행 건너뛰기
+        if (
+          regNo.includes("접수번호") || name.includes("성명") || 
+          regNo.includes("프로그램") || name.includes("프로그램") || 
+          name.includes("이용자 현황") || name.includes("이용자현황") ||
+          no === "번" || no.includes("번호")
+        ) {
+          continue;
+        }
 
         const maleCount = parseInt(r[3]) || 0;
         const femaleCount = parseInt(r[4]) || 0;
@@ -1406,7 +1427,11 @@
           else gender = "단체";
         }
 
-        const age = parseInt(r[5]) || 0;
+        // ★ [핵심 개선: 0세 영아 지원]
+        // 0살(만 0세, 수개월 영아)도 정상 연령으로 완벽 인식! (아예 빈칸으로 비어있는 경우만 null로 설정하여 누락 판정)
+        const rawAgeStr = String(r[5] !== undefined && r[5] !== null ? r[5] : "").trim();
+        const hasValidAge = rawAgeStr !== "" && !isNaN(parseInt(rawAgeStr)) && parseInt(rawAgeStr) >= 0;
+        const age = hasValidAge ? parseInt(rawAgeStr) : null;
 
         let severity = "";
         let sevActual = parseInt(r[6]) || 0;
@@ -1551,12 +1576,15 @@
       let severe = 0, mild = 0, nonDisabled = 0;
       let recipient = 0, nearPoverty = 0, otherDiscount = 0;
 
-      // ★ [1. 시트 내 번호 순서(연번) 검증 - 단순 1,2,3... 및 단체 포함 누적 인원수 번호 체계 자동 판별]
+      // ★ [1. 시트 내 번호 순서(연번) 검증 - 단순 1,2,3... 및 섹션별 1부터 시작 및 단체 포함 누적 인원수 번호 체계 자동 판별]
       let matchesSimpleSeq = true;
+      let matchesSectionSeq = true; // ★ 올망졸망1(1~4), 올망졸망2(1~6) 처럼 섹션별 1부터 리셋되는 경우 허용!
       let matchesAccumSeq = true;
       const simpleSeqIssues = [];
+      const sectionSeqIssues = [];
       const accumSeqIssues = [];
       let runningPersons = 0;
+      let expectedSectionNo = 1;
 
       rows.forEach((r, idx) => {
         accumCount += r.accumCount;
@@ -1568,11 +1596,13 @@
 
         if (isNaN(noVal) || noVal <= 0) {
           matchesSimpleSeq = false;
+          matchesSectionSeq = false;
           matchesAccumSeq = false;
           simpleSeqIssues.push(`${r.rowIdx}행 번호 누락/오류('${rawNo || "빈칸"}')`);
+          sectionSeqIssues.push(`${r.rowIdx}행 번호 누락/오류('${rawNo || "빈칸"}')`);
           accumSeqIssues.push(`${r.rowIdx}행 번호 누락/오류('${rawNo || "빈칸"}')`);
         } else {
-          // 1) 단순 1, 2, 3... 순서 검사
+          // 1) 전체 단순 1, 2, 3... 순서 검사
           const expectedSimple = idx + 1;
           if (noVal !== expectedSimple) {
             matchesSimpleSeq = false;
@@ -1580,7 +1610,17 @@
             else simpleSeqIssues.push(`${noVal}번 순서오류`);
           }
 
-          // 2) 누적 인원수 번호 검사 (단체 인원수가 누적되어 1, 2, 3, 4, 7, 13, 24, 29, 49 처럼 매겨지는 체계)
+          // 2) 섹션별 1부터 리셋 검사 (올망졸망1: 1,2,3,4 ➔ 올망졸망2: 1,2,3,4,5,6)
+          if (noVal === 1 && idx > 0 && expectedSectionNo > 1) {
+            expectedSectionNo = 1; // 새로운 하위 표로 번호 리셋 감지
+          }
+          if (noVal !== expectedSectionNo) {
+            matchesSectionSeq = false;
+            sectionSeqIssues.push(`${expectedSectionNo}번 누락 또는 순서오류`);
+          }
+          expectedSectionNo++;
+
+          // 3) 누적 인원수 번호 검사 (단체 인원수가 누적되어 1, 2, 3, 4, 7, 13, 24, 29, 49 처럼 매겨지는 체계)
           const expectedAccum = runningPersons;
           if (noVal !== expectedAccum) {
             matchesAccumSeq = false;
@@ -1686,10 +1726,10 @@
         }
       });
 
-      // ★ [3-3. 65세 이상 감면서비스 '기타' 누락 검증]
+      // ★ [3-3. 65세 이상 감면서비스 '기타' 누락 검증 (0세 영아 정상 통과, 65세 이상 어르신만 검사)]
       const seniorMissingOtherIssues = [];
       rows.forEach(r => {
-        if (r.age >= 65 && r.discount !== "수급자" && r.discount !== "차상위" && (r.rawDiscOthActual === 0 && r.rawDiscOthAccum === 0)) {
+        if (r.age !== null && r.age !== undefined && r.age >= 65 && r.discount !== "수급자" && r.discount !== "차상위" && (r.rawDiscOthActual === 0 && r.rawDiscOthAccum === 0)) {
           seniorMissingOtherIssues.push({
             rowIdx: r.rowIdx,
             no: r.no,
@@ -1699,20 +1739,23 @@
         }
       });
 
-      const isNoSeqOk = (matchesSimpleSeq || matchesAccumSeq);
+      const isNoSeqOk = (matchesSimpleSeq || matchesSectionSeq || matchesAccumSeq);
       let noSeqStatusText = "";
       let noSeqIssues = [];
 
       if (matchesSimpleSeq) {
         noSeqStatusText = `1~${rows.length} 정상`;
+      } else if (matchesSectionSeq) {
+        noSeqStatusText = `섹션별 정상`;
       } else if (matchesAccumSeq) {
         noSeqStatusText = `누적 1~${runningPersons} 정상`;
       } else {
-        noSeqIssues = simpleSeqIssues.length <= accumSeqIssues.length ? simpleSeqIssues : accumSeqIssues;
+        const issuesCandidates = [simpleSeqIssues, sectionSeqIssues, accumSeqIssues].filter(arr => arr.length > 0);
+        noSeqIssues = issuesCandidates.sort((a, b) => a.length - b.length)[0] || simpleSeqIssues;
         noSeqStatusText = noSeqIssues[0] || "번호 순서 오류";
       }
 
-      // ★ [2. 시트 합계(계) 행 전수 대조 검증 - 중증/경증/감면/장애유형별 100% 분리 전수검사]
+      // ★ [2. 시트 합계(계) 행 전수 대조 검증 - 한 시트에 계 행이 여러 개(올망졸망1, 올망졸망2 등) 있어도 통합 합산 대조!]
       const sumIssues = [];
       const json = XLSX.utils.sheet_to_json(rawSheet, { header: 1, defval: "" });
       let sheetRecordedActual = null;
@@ -1720,17 +1763,41 @@
       let sheetFooterNextRow = null;
       let sheetFooterRowIdx = null;
 
+      const footerRows = [];
       for (let i = 0; i < json.length; i++) {
         const row = json[i];
         if (!row || !Array.isArray(row)) continue;
-        if (row.some(cell => String(cell).trim() === "계")) {
-          sheetFooterRow = row;
-          sheetFooterRowIdx = i + 1;
-          if (i + 1 < json.length) {
-            sheetFooterNextRow = json[i + 1];
-          }
-          break;
+        const hasGye = row.slice(0, 5).some(cell => String(cell || '').trim() === "계") || String(row[0] || '').trim() === "계";
+        if (hasGye) {
+          const nextR = (i + 1 < json.length) ? json[i + 1] : [];
+          footerRows.push({ rowIdx: i + 1, row: row, nextRow: nextR });
         }
+      }
+
+      if (footerRows.length > 1) {
+        // 복수의 계 행이 있는 경우(올망졸망1 + 올망졸망2): 각 열의 수치를 합산한 가상 통합 계 행 생성!
+        const combRow = [];
+        const combNext = [];
+        for (let c = 0; c < 40; c++) {
+          let sumVal = 0;
+          let sumNext = 0;
+          footerRows.forEach(f => {
+            const v = parseInt(f.row[c]) || 0;
+            const vn = parseInt(f.nextRow[c]) || 0;
+            sumVal += v;
+            sumNext += vn;
+          });
+          combRow[c] = sumVal;
+          combNext[c] = sumNext;
+        }
+        combRow[0] = "계";
+        sheetFooterRow = combRow;
+        sheetFooterNextRow = combNext;
+        sheetFooterRowIdx = footerRows[0].rowIdx;
+      } else if (footerRows.length === 1) {
+        sheetFooterRow = footerRows[0].row;
+        sheetFooterNextRow = footerRows[0].nextRow;
+        sheetFooterRowIdx = footerRows[0].rowIdx;
       }
 
       const calcTotalPersons = male + female;
@@ -2294,7 +2361,7 @@
             // ★ [동명이인 판별 핵심] 접수번호가 '자원봉사자', 소속명, 공란 등 비등록인 경우:
             // 성명이 같고 접수번호가 같더라도 나이가 다르거나(6세 vs 24세), 성별이 다르면(남 vs 여) 절대 동일인으로 합치지 않고 별도 분리!
             const rowGender = row.gender || (row.maleCount > 0 ? "남" : (row.femaleCount > 0 ? "여" : ""));
-            const rowAge = row.age > 0 ? row.age : 0;
+            const rowAge = (row.age !== null && row.age !== undefined && row.age >= 0) ? row.age : null;
 
             let matchedKey = null;
             for (const [key, exUser] of userMap.entries()) {
@@ -2308,9 +2375,9 @@
                 continue; // 성별 다르면 다른 사람!
               }
 
-              // 연령 충돌 검사 (예: 6세 vs 24세)
-              const exAge = exUser.age;
-              if (rowAge > 0 && exAge > 0 && rowAge !== exAge) {
+              // 연령 충돌 검사 (예: 6세 vs 24세, 둘 다 나이가 있는데 서로 다른 경우)
+              const exAge = (exUser.age !== null && exUser.age !== undefined && exUser.age >= 0) ? exUser.age : null;
+              if (rowAge !== null && exAge !== null && rowAge !== exAge) {
                 continue; // 나이 다르면 다른 사람!
               }
 
@@ -2322,7 +2389,7 @@
               userKey = matchedKey;
             } else {
               // 성별 또는 나이가 달라 새로운 독립 동명이인으로 분리 생성!
-              userKey = `${cleanName}___${cleanRegNo}___${rowGender || '미상'}___${rowAge || '미상'}_${row.sheetName}_${row.rowIdx}`;
+              userKey = `${cleanName}___${cleanRegNo}___${rowGender || '미상'}___${rowAge !== null ? rowAge : '미상'}_${row.sheetName}_${row.rowIdx}`;
             }
           }
         }
@@ -3064,7 +3131,7 @@
         const isMissingGroupTag = user.issues.some(i => i.code === 'MISSING_GROUP_TAG');
         const isMissingRegNo = user.issues.some(i => i.code === 'MISSING_REGNO_ERROR') || (!user.isGroup && (!user.regNo || user.regNo.trim() === "" || user.regNo.trim() === "-" || user.regNo.trim() === "미기재"));
         const isHomonymError = user.issues.some(i => i.code === 'HOMONYM_NOT_DISTINGUISHED');
-        const isMissingAge = user.issues.some(i => i.code === 'MISSING_AGE_ERROR') || (!user.isGroup && (!user.age || user.age <= 0));
+        const isMissingAge = user.issues.some(i => i.code === 'MISSING_AGE_ERROR') || (!user.isGroup && (user.age === null || user.age === undefined || user.age < 0 || isNaN(user.age)));
         const hasSevConflict = user.issues.some(i => i.code === 'MULTI_SEVERITY_CONFLICT' || i.code === 'SEVERITY_MISMATCH');
         const hasDiscConflict = user.issues.some(i => i.code === 'MULTI_DISCOUNT_CONFLICT' || i.code === 'DISCOUNT_MISMATCH');
         const hasSeniorOtherMissing = user.issues.some(i => i.code === 'MISSING_SENIOR_OTHER_DISCOUNT');
@@ -3142,7 +3209,7 @@
         const origAge = (user.originalValues && user.originalValues.age) || "";
         const ageEdit = getEditInfo('age');
         let ageCls = "text-center";
-        let ageContent = user.age > 0 ? String(user.age) : "";
+        let ageContent = (user.age !== null && user.age !== undefined && user.age >= 0) ? String(user.age) : "";
         let agePlaceholder = "";
         let ageTitle = "연령을 직접 클릭하여 수정할 수 있습니다";
         if (ageEdit) {
@@ -3842,8 +3909,12 @@
               user.femaleCell = fVal;
               if (fVal > 0 && user.maleCell === 0) user.gender = "여";
             } else if (field === 'age') {
-              const curAge = getCellNum(td);
-              recordFieldChange('age', curAge > 0 ? String(curAge) : "", FIELD_LABELS.age);
+              const rawAgeText = (td.textContent || td.innerText || '').trim();
+              let curAge = null;
+              if (rawAgeText !== "" && !isNaN(parseInt(rawAgeText)) && parseInt(rawAgeText) >= 0) {
+                curAge = parseInt(rawAgeText);
+              }
+              recordFieldChange('age', curAge !== null ? String(curAge) : "", FIELD_LABELS.age);
               user.age = curAge;
               if (user.participations) user.participations.forEach(p => p.age = curAge);
             } else if (field === 'sevActual') {
@@ -4107,7 +4178,7 @@
         maleCell: 0,
         femaleCell: 0,
         gender: "",
-        age: 0,
+        age: null,
         severity: "",
         discount: "",
         sevActual: 0,
@@ -4287,18 +4358,19 @@
           }
         }
 
-        // 2. 연령(나이) 누락 검증
+        // 2. 연령(나이) 누락 검증 (0세 영아는 정상 연령으로 완벽 인정, 빈칸/미기재만 누락 판정!)
         if (!user.isGroup) {
-          if (!user.age || user.age <= 0) {
+          const isAgeMissing = user.age === null || user.age === undefined || user.age < 0 || isNaN(user.age);
+          if (isAgeMissing) {
             user.issues.push({
               type: "error",
               code: "MISSING_AGE_ERROR",
               title: "🚨 연령(나이) 누락 오류 (필수 입력 항목)",
-              desc: `개인 이용자는 연령(나이)이 필수 기재되어야 합니다. 나이가 누락되었거나 0으로 기재되어 있으니 정확한 나이를 입력해 주세요!`,
+              desc: `개인 이용자는 연령(나이)이 필수 기재되어야 합니다. 나이가 누락되었으니(빈칸) 정확한 나이를 입력해 주세요! (0세 영아인 경우 '0' 입력 가능)`,
               sheets: parts.map(p => ({
                 sheet: p.sheetName,
                 row: p.rowIdx,
-                val: `연령: 미기재 (빈칸 또는 0)`
+                val: `연령: 미기재 (빈칸)`
               }))
             });
           }
@@ -4479,7 +4551,7 @@
         }
 
         // 7. 65세 이상 기타 감면서비스 검증
-        if (!user.isGroup && user.age >= 65) {
+        if (!user.isGroup && user.age !== null && user.age !== undefined && user.age >= 65) {
           const hasRec = user.recActual > 0 || user.recAccum > 0 || user.discount === "수급자";
           const hasNear = user.nearActual > 0 || user.nearAccum > 0 || user.discount === "차상위";
           if (!hasRec && !hasNear) {
@@ -4557,7 +4629,7 @@
           u.name,
           maleCell,
           femaleCell,
-          u.age ? String(u.age) : "",
+          (u.age !== null && u.age !== undefined && u.age >= 0) ? String(u.age) : "",
           sevActual,
           sevAccum,
           mildActual,
@@ -4591,16 +4663,16 @@
       const grandTotalIssues = aggregatedUsers.reduce((sum, u) => sum + (u.issues ? u.issues.filter(i => i.type === 'error').length : 0), 0);
 
       const ageGroups = [
-        { label: "0~7", match: a => a >= 0 && a <= 7 },
-        { label: "8~10", match: a => a >= 8 && a <= 10 },
-        { label: "11~20", match: a => a >= 11 && a <= 20 },
-        { label: "21~30", match: a => a >= 21 && a <= 30 },
-        { label: "31~40", match: a => a >= 31 && a <= 40 },
-        { label: "41~50", match: a => a >= 41 && a <= 50 },
-        { label: "51~60", match: a => a >= 51 && a <= 60 },
-        { label: "61~70", match: a => a >= 61 && a <= 70 },
-        { label: "70초과", match: a => a > 70 },
-        { label: "미확인", match: a => !a || a <= 0 }
+        { label: "0~7", match: a => a !== null && a !== undefined && a >= 0 && a <= 7 },
+        { label: "8~10", match: a => a !== null && a !== undefined && a >= 8 && a <= 10 },
+        { label: "11~20", match: a => a !== null && a !== undefined && a >= 11 && a <= 20 },
+        { label: "21~30", match: a => a !== null && a !== undefined && a >= 21 && a <= 30 },
+        { label: "31~40", match: a => a !== null && a !== undefined && a >= 31 && a <= 40 },
+        { label: "41~50", match: a => a !== null && a !== undefined && a >= 41 && a <= 50 },
+        { label: "51~60", match: a => a !== null && a !== undefined && a >= 51 && a <= 60 },
+        { label: "61~70", match: a => a !== null && a !== undefined && a >= 61 && a <= 70 },
+        { label: "70초과", match: a => a !== null && a !== undefined && a > 70 },
+        { label: "미확인", match: a => a === null || a === undefined || a < 0 }
       ];
 
       const severityGroups = [
@@ -7040,15 +7112,22 @@
     let lastSentGoogleSheetSignature = "";
     let lastSentGoogleSheetTime = 0;
 
-    // ★ [구글 시트 초안전 전송 엔진] 중복 전송 100% 방지 및 단일 전송 보장
+    // ★ [구글 시트 전송 엔진] 오직 실제 엑셀 파일 분석 완료 시에만 딱 1회 전송!
+    // (페이지 새로고침, 관리자 모드 접속 시에는 절대 구글 시트를 건드리지 않음!)
     function sendToGoogleSheet(logData) {
       const gsUrl = getGoogleSheetUrl();
       if (!gsUrl || !gsUrl.startsWith('http')) return;
       
-      const sig = `${logData.fileName}_${logData.actualUsers}_${logData.totalAccum}`;
+      const fn = String(logData.fileName || "").trim();
+      // 실제 엑셀 파일명이 아니면 절대 전송 금지!
+      if (!fn || fn === "엑셀분석" || fn === "분석 테스트" || (!fn.endsWith('.xlsx') && !fn.endsWith('.xlsm') && !fn.endsWith('.xls') && !fn.includes('.'))) {
+        return;
+      }
+      
+      const sig = `${fn}_${logData.actualUsers}_${logData.totalAccum}`;
       const now = Date.now();
-      if (sig === lastSentGoogleSheetSignature && (now - lastSentGoogleSheetTime) < 4000) {
-        return; // 4초 내 동일 데이터 중복 전송 방지
+      if (sig === lastSentGoogleSheetSignature && (now - lastSentGoogleSheetTime) < 5000) {
+        return; // 5초 내 동일 파일 중복 전송 방지
       }
       lastSentGoogleSheetSignature = sig;
       lastSentGoogleSheetTime = now;
@@ -7057,7 +7136,7 @@
         const params = new URLSearchParams({
           action: 'log',
           timestamp: logData.timestamp || new Date().toLocaleString('ko-KR'),
-          fileName: logData.fileName || '엑셀분석',
+          fileName: fn,
           sheetCount: String(logData.sheetCount || 0),
           actualUsers: String(logData.actualUsers || 0),
           totalAccum: String(logData.totalAccum || 0),
@@ -7070,81 +7149,6 @@
       } catch (e) {
         console.warn("구글시트 전송 예외:", e);
       }
-    }
-
-    // ★ [JSONP 엔진: 브라우저 CORS 차단 100% 무력화]
-    // 구글 시트에서 전체 누적 기록 및 비밀번호를 안전하게 읽어오는 전용 로더!
-    function fetchJsonp(url, callbackName) {
-      const existing = document.getElementById('jsonp_' + callbackName);
-      if (existing) existing.remove();
-      const script = document.createElement('script');
-      script.id = 'jsonp_' + callbackName;
-      script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + callbackName + '&t=' + Date.now();
-      script.onerror = () => script.remove();
-      document.body.appendChild(script);
-    }
-
-    // 전역 콜백 1: 구글 시트에서 최신 관리자 비밀번호 수신
-    window.onCloudPasswordLoaded = function(res) {
-      if (res && res.status === 'success' && res.password) {
-        localStorage.setItem(ADMIN_PASSWORD_KEY, String(res.password).trim());
-        console.log("✅ 구글시트에서 최신 관리자 비밀번호 동기화 완료:", res.password);
-      }
-      const s = document.getElementById('jsonp_onCloudPasswordLoaded');
-      if (s) s.remove();
-    };
-
-    function syncAdminPasswordFromCloud() {
-      const gsUrl = getGoogleSheetUrl();
-      if (!gsUrl || !gsUrl.startsWith('http')) return;
-      fetchJsonp(gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_password', 'onCloudPasswordLoaded');
-    }
-
-    // 전역 콜백 2: 구글 시트에서 전체 누적 실행 이력 수신 및 화면 1초 복원!
-    window.onCloudLogsLoaded = function(res) {
-      if (res && res.status === 'success' && Array.isArray(res.logs)) {
-        const cloudLogs = res.logs;
-        console.log("✅ 구글시트에서 전체 누적 기록 수신 완료:", cloudLogs.length, "건");
-        
-        const totalRuns = cloudLogs.length;
-        const totalUsers = cloudLogs.reduce((sum, l) => sum + (l.actualUsers || 0), 0);
-        const totalAccum = cloudLogs.reduce((sum, l) => sum + (l.totalAccum || 0), 0);
-        const totalIssues = cloudLogs.reduce((sum, l) => sum + (l.issuesCount || 0), 0);
-        
-        const todayStr = new Date().toLocaleDateString('ko-KR');
-        const todayRuns = cloudLogs.filter(l => String(l.timestamp).includes(todayStr) || String(l.timestamp).includes(new Date().toISOString().split('T')[0])).length;
-
-        const totalRunsEl = document.getElementById('adminTotalRuns');
-        const todayRunsEl = document.getElementById('adminTodayRuns');
-        const totalUsersEl = document.getElementById('adminTotalUsers');
-        const totalIssuesEl = document.getElementById('adminTotalIssues');
-
-        if (totalRunsEl) totalRunsEl.textContent = totalRuns.toLocaleString();
-        if (todayRunsEl) todayRunsEl.textContent = todayRuns.toLocaleString();
-        if (totalUsersEl) totalUsersEl.textContent = totalUsers.toLocaleString();
-        if (totalIssuesEl) totalIssuesEl.textContent = totalIssues.toLocaleString();
-        updateHeaderRunBadge(totalRuns);
-
-        currentAdminFilteredLogs = cloudLogs;
-        const localData = getRunAnalytics();
-        localData.totalRuns = totalRuns;
-        localData.todayRuns = todayRuns;
-        localData.totalUsers = totalUsers;
-        localData.totalAccum = totalAccum;
-        localData.totalIssues = totalIssues;
-        localData.logs = cloudLogs;
-        try { localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(localData)); } catch (_) {}
-
-        filterAdminLogs();
-      }
-      const s = document.getElementById('jsonp_onCloudLogsLoaded');
-      if (s) s.remove();
-    };
-
-    function loadCloudAnalytics() {
-      const gsUrl = getGoogleSheetUrl();
-      if (!gsUrl || !gsUrl.startsWith('http')) return;
-      fetchJsonp(gsUrl + (gsUrl.includes('?') ? '&' : '?') + 'action=get_logs', 'onCloudLogsLoaded');
     }
 
     function updateHeaderRunBadge(count) {
@@ -7244,7 +7248,6 @@
 
     function openAdminModal() {
       renderAdminDashboard();
-      loadCloudAnalytics();
       const modal = document.getElementById('adminModal');
       if (modal) modal.classList.remove('hidden');
     }
@@ -7534,9 +7537,6 @@
       });
     }
     setupFloatingRecalcBarScroll();
-    // ★ [페이지 접속 즉시 구글 시트에서 최신 관리자 비밀번호 및 누적 실행 통계 자동 동기화 복원]
-    syncAdminPasswordFromCloud();
-    loadCloudAnalytics();
   </script>
 </body>
 </html>
