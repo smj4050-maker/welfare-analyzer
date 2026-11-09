@@ -4,25 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>이용자현황 분석기 | 제작,배포 기획홍보팀 송민정</title>
-  <!-- ★ [영구 기본 환경 설정] 로컬 스토리지가 초기화되거나 브라우저를 다시 열어도 절대 리셋되지 않는 영구 기본값 -->
-  <script>
-    const DEFAULT_CONFIG = {
-      adminPassword: "0000",
-      googleSheetUrl: "https://script.google.com/macros/s/AKfycbzYINS_VYBciLgDUtSosj-IxoNEO2pksq5H0UkAp-hPlTOcPv_dd41h5l1UbBW2US0wDA/exec"
-    };
-  </script>
-  <!-- 전역 스크립트 에러 감지 및 즉시 알림 핸들러 -->
-  <script>
-    window.onerror = function(msg, url, line, col, error) {
-      console.error("전역 에러 감지:", msg, "라인:", line, error);
-      alert("⚠️ 시스템 알림 (스크립트 오류 감지):\n" + msg + "\n(줄 번호: " + line + ")");
-    };
-    function handleDragOver(e) { if (e) { e.preventDefault(); e.stopPropagation(); } }
-    function handleDragLeave(e) { if (e) { e.preventDefault(); e.stopPropagation(); } }
-    function handleDrop(e) { if (e) { e.preventDefault(); e.stopPropagation(); } }
-    function handleFileSelect(e) {}
-    function triggerFileUpload() {}
-  </script>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- SheetJS (xlsx.full.min.js) -->
@@ -1268,11 +1249,13 @@
             return;
           }
           try {
-            const rows = parseSheetRows(wb.Sheets[sName], sName, false);
-            if (rows.length > 0) {
-              programSheetsData.push(...rows);
-              calcSheetVStats(sName, rows, wb.Sheets[sName]);
-            }
+            const sections = parseSheetIntoSections(wb.Sheets[sName], sName, excelYellowStyles);
+            sections.forEach(sec => {
+              if (sec.rows && sec.rows.length > 0) {
+                programSheetsData.push(...sec.rows);
+                calcSheetVStats(sec.programName, sec.rows, wb.Sheets[sName], sec.footerRow, sec.footerNextRow, sName);
+              }
+            });
           } catch (sheetErr) {
             console.error(`시트 '${sName}' 분석 중 오류:`, sheetErr);
           }
@@ -1353,57 +1336,168 @@
       return null;
     }
 
-    function parseSheetRows(sheet, sheetName, isSummary) {
+    function extractProgramNameFromTitle(titleText, defaultName) {
+      if (!titleText) return defaultName;
+      let clean = String(titleText).trim().replace(/[\r\n"']/g, ' ').trim();
+      
+      // 1) "프로그램" 앞의 텍스트 추출 (가장 흔하고 확실한 패턴: 올망졸망1 프로그램 2026년...)
+      if (clean.includes("프로그램")) {
+        let pName = clean.split(/프로그램/i)[0].trim();
+        if (pName && pName.length >= 2) return pName;
+      }
+      
+      // 2) "202x년" 또는 "\d{4}년" 앞의 텍스트 추출 (사전사후평가 2026년...)
+      if (/\d{4}\s*년/.test(clean)) {
+        let pName = clean.split(/\d{4}\s*년/)[0].trim();
+        if (pName && pName.length >= 2) return pName;
+      }
+      
+      // 3) "이용자" 앞의 텍스트 추출
+      if (clean.includes("이용자")) {
+        let pName = clean.split(/이용자/)[0].trim();
+        if (pName && pName.length >= 2) return pName;
+      }
+      
+      return defaultName;
+    }
+
+    // ★ [핵심: 한 시트 내 다중 사업(프로그램) 개별 분리 파싱 엔진]
+    // 올망졸망1/올망졸망2, 언어사정/평가/상담, 놀이사정/평가/상담, 미술사정/평가/상담 등을 각각 독립된 표(사업)로 자동 분리!
+    function parseSheetIntoSections(sheet, sName, excelYellowStyles) {
       if (!sheet) return [];
       const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-      const rows = [];
-      let actualDataRow = -1;
+      if (!json || json.length === 0) return [];
 
+      // 1. 시트 내의 모든 "계" 행 인덱스 찾기
+      const gyeIndices = [];
       for (let i = 0; i < json.length; i++) {
         const row = json[i];
+        if (!row || !Array.isArray(row)) continue;
+        const isGye = row.slice(0, 5).some(c => String(c || '').trim() === "계") || String(row[0] || '').trim() === "계";
+        if (isGye) {
+          gyeIndices.push(i);
+        }
+      }
+
+      // 계 행이 하나도 없는 경우: 단일 섹션으로 처리
+      if (gyeIndices.length === 0) {
+        const rows = parseSectionRows(json, 0, json.length, sName, sName, null, null, excelYellowStyles);
+        return [{ programName: sName, rows: rows, footerRow: null, footerNextRow: null, originalSheetName: sName }];
+      }
+
+      const sections = [];
+      let prevEnd = 0;
+
+      for (let k = 0; k < gyeIndices.length; k++) {
+        const footerIdx = gyeIndices[k];
+        const footerRow = json[footerIdx] || [];
+        const footerNextRow = (footerIdx + 1 < json.length) ? json[footerIdx + 1] : [];
+        const startIdx = prevEnd;
+        const endIdx = footerIdx;
+        prevEnd = footerIdx + 1;
+        // 계 행 바로 다음 행이 연인원 요약 행('연' 포함)인 경우 건너뛰기
+        if (prevEnd < json.length && json[prevEnd].some(c => String(c || '').trim() === "연")) {
+          prevEnd++;
+        }
+
+        // 섹션 타이틀 탐색 (startIdx부터 endIdx 사이에서 '프로그램' 또는 '이용자 현황' 포함 행)
+        let sectionTitle = "";
+        for (let r = startIdx; r < endIdx; r++) {
+          const row = json[r];
+          if (!row || !Array.isArray(row)) continue;
+          const text = row.slice(0, 10).map(c => String(c || '').trim()).join(' ');
+          if (text.includes("프로그램") || text.includes("이용자 현황") || text.includes("이용자현황") || /\d{4}\s*년/.test(text)) {
+            sectionTitle = text;
+            break;
+          }
+        }
+
+        let programName = sName;
+        if (sectionTitle) {
+          const extracted = extractProgramNameFromTitle(sectionTitle, sName);
+          if (extracted) {
+            programName = extracted;
+          }
+        } else if (gyeIndices.length > 1) {
+          programName = `${sName}${k + 1}`;
+        }
+
+        // 동일 이름 중복 방지
+        let finalProgName = programName;
+        let dupSuffix = 2;
+        while (sections.some(s => s.programName === finalProgName)) {
+          finalProgName = `${programName}_${dupSuffix++}`;
+        }
+
+        const rows = parseSectionRows(json, startIdx, endIdx, finalProgName, sName, footerRow, footerNextRow, excelYellowStyles);
+        if (rows.length > 0 || gyeIndices.length === 1) {
+          sections.push({
+            programName: finalProgName,
+            rows: rows,
+            footerRow: footerRow,
+            footerNextRow: footerNextRow,
+            originalSheetName: sName
+          });
+        }
+      }
+
+      return sections;
+    }
+
+    function parseSectionRows(json, startIdx, endIdx, programName, originalSheetName, footerRow, footerNextRow, excelYellowStyles) {
+      let headerRowIdx = -1;
+      let noteColIdx = 33;
+      for (let r = startIdx; r < endIdx; r++) {
+        const row = json[r];
+        if (!row || !Array.isArray(row)) continue;
+        if (row.some(c => String(c || '').trim().includes("접수번호"))) {
+          headerRowIdx = r;
+          for (let c = 0; c < row.length; c++) {
+            if (String(row[c] || "").trim().includes("비고")) {
+              noteColIdx = c;
+              break;
+            }
+          }
+          break;
+        }
+      }
+
+      let actualDataRow = -1;
+      const searchStart = (headerRowIdx !== -1) ? headerRowIdx + 1 : startIdx;
+      for (let r = searchStart; r < endIdx; r++) {
+        const row = json[r];
         if (!row || !Array.isArray(row)) continue;
         const col0 = String(row[0] !== undefined ? row[0] : "").trim();
         const col1 = String(row[1] !== undefined ? row[1] : "").trim();
         const col2 = String(row[2] !== undefined ? row[2] : "").trim();
         if (!isNaN(parseInt(col0)) && (col1 !== "" || col2 !== "")) {
-          actualDataRow = i;
+          actualDataRow = r;
           break;
         }
       }
 
-      if (actualDataRow === -1) return rows;
+      if (actualDataRow === -1) return [];
 
-      // 비고 열 인덱스 동적 감지
-      let noteColIdx = 33;
-      for (let h = 0; h < actualDataRow; h++) {
-        const headerRow = json[h];
-        if (!headerRow || !Array.isArray(headerRow)) continue;
-        for (let c = 0; c < headerRow.length; c++) {
-          if (String(headerRow[c] || "").trim().includes("비고")) {
-            noteColIdx = c;
-            break;
-          }
-        }
-      }
+      const rows = [];
+      const sheetYellowMap = (excelYellowStyles && excelYellowStyles.sheets) ? excelYellowStyles.sheets.get(originalSheetName) : null;
 
-      for (let i = actualDataRow; i < json.length; i++) {
+      for (let i = actualDataRow; i < endIdx; i++) {
         const r = json[i];
         if (!r || !Array.isArray(r)) continue;
         const no = String(r[0] !== undefined ? r[0] : "").trim();
         const regNo = String(r[1] !== undefined ? r[1] : "").trim();
         const name = String(r[2] !== undefined ? r[2] : "").trim();
 
-        // ★ [핵심 개선] 계 행이 나오더라도 break하지 않고 continue! (올망졸망1 아래의 올망졸망2 등 다중 표 모두 연속 인식!)
-        const isFooterRow = (no === "계" || regNo === "계" || name === "계" || r.slice(0, 5).some(c => String(c || '').trim() === "계"));
-        if (isFooterRow) continue;
+        // 계 행 도달 시 즉시 중단
+        if (no === "계" || regNo === "계" || name === "계" || r.slice(0, 5).some(c => String(c || '').trim() === "계")) break;
 
-        // 빈 행 또는 계 행 다음의 연인원 요약 행 건너뛰기
+        // 빈 행 건너뛰기
         if (!regNo && !name) continue;
 
-        // 하위 프로그램 제목 및 중간 헤더 행 건너뛰기
+        // 헤더 및 소제목 행 건너뛰기
         if (
-          regNo.includes("접수번호") || name.includes("성명") || 
-          regNo.includes("프로그램") || name.includes("프로그램") || 
+          regNo.includes("접수번호") || name.includes("성명") ||
+          regNo.includes("프로그램") || name.includes("프로그램") ||
           name.includes("이용자 현황") || name.includes("이용자현황") ||
           no === "번" || no.includes("번호")
         ) {
@@ -1412,7 +1506,6 @@
 
         const maleCount = parseInt(r[3]) || 0;
         const femaleCount = parseInt(r[4]) || 0;
-
         const isGroup = regNo.includes("단체") || name.includes("단체") || (maleCount > 1 || femaleCount > 1);
         const groupCount = isGroup ? ((maleCount + femaleCount) || 1) : 0;
         const missingGroupTag = (maleCount > 1 || femaleCount > 1) && !regNo.includes("단체");
@@ -1427,8 +1520,6 @@
           else gender = "단체";
         }
 
-        // ★ [핵심 개선: 0세 영아 지원]
-        // 0살(만 0세, 수개월 영아)도 정상 연령으로 완벽 인식! (아예 빈칸으로 비어있는 경우만 null로 설정하여 누락 판정)
         const rawAgeStr = String(r[5] !== undefined && r[5] !== null ? r[5] : "").trim();
         const hasValidAge = rawAgeStr !== "" && !isNaN(parseInt(rawAgeStr)) && parseInt(rawAgeStr) >= 0;
         const age = hasValidAge ? parseInt(rawAgeStr) : null;
@@ -1438,7 +1529,6 @@
         let sevAccum = parseInt(r[7]) || 0;
         let mildActual = parseInt(r[8]) || 0;
         let mildAccum = parseInt(r[9]) || 0;
-
         if (sevActual > 0 || sevAccum > 0) severity = "중증";
         else if (mildActual > 0 || mildAccum > 0) severity = "경증";
 
@@ -1465,33 +1555,22 @@
 
         if (disabilityCounts["비장애인"] > 0 || disabilityCounts["비장애"] > 0) severity = "비장애인";
 
-        let note = String(r[noteColIdx] || "").trim();
-        if (!note && r[33]) note = String(r[33]).trim();
-        if (!note) {
-          for (let c = 32; c < Math.min(r.length, 36); c++) {
-            const val = String(r[c] || "").trim();
-            if (val && isNaN(Number(val)) && val !== "정상" && val !== "오류") { note = val; break; }
-          }
-        }
+        // ★ [사용자 핵심 요구: 비고 열 초과 데이터 수집 절대 금지!]
+        // 비고 열(noteColIdx, 보통 33열)에 있는 순수 비고만 가져오며, 그 다음 열(34열: 올망졸망1, 35열: 날짜) 등은 비고로 절대 가져오지 않음!
+        let note = String(r[noteColIdx] !== undefined ? r[noteColIdx] : (r[33] !== undefined ? r[33] : "")).trim();
 
         let accumCount = 0;
         if (isGroup) {
           accumCount = (groupCount || (maleCount + femaleCount)) || totalDisabilityAccum ||
             ((sevAccum || mildAccum || discRecAccum || discNearAccum || discOthAccum) || 1);
-          // 단체인데 장애유형이 아무것도 안 적혀 있으면 비장애인에 groupCount 할당
           if (totalDisabilityAccum === 0) {
             disabilityCounts["비장애인"] = groupCount;
             totalDisabilityAccum = groupCount;
             if (!severity) severity = "비장애인";
           }
         } else {
-          // 개인 이용자의 연인원(이용 횟수):
-          // 1순위: 장애정도 연인원(중증연 + 경증연)
-          // 2순위: 감면서비스 연인원(수급자연 + 차상위연 + 기타연)
-          // 3순위: 장애유형 중 최대값 (중복장애인은 각 장애유형 열에 동일 횟수가 반복 기재되므로 합산 금지!)
           const sevMildAccumTotal = (sevAccum + mildAccum);
           const discAccumTotal = (discRecAccum + discNearAccum + discOthAccum);
-
           if (sevMildAccumTotal > 0) {
             accumCount = sevMildAccumTotal;
           } else if (discAccumTotal > 0) {
@@ -1503,23 +1582,16 @@
             accumCount = 1;
           }
         }
-        const range = sheet['!ref'] ? XLSX.utils.decode_range(sheet['!ref']) : { s: { r: 0 } };
-        const excelRow1 = i + 1; // 1-indexed 행 번호 (실제 엑셀 행 번호)
-        const excelRow2 = range.s.r + i + 1; // !ref 시작 오프셋 적용 행 번호
-        const sheetYellowMap = (excelYellowStyles && excelYellowStyles.sheets) ? excelYellowStyles.sheets.get(sheetName) : null;
-        
-        // ★ [인접 행 번짐 오염 완전 제거] 오직 본인 행의 실제 노란색 채우기만 엄격 검사!
-        const isRowYellow = sheetYellowMap ? (
-          sheetYellowMap.get(excelRow1) === true ||
-          sheetYellowMap.get(excelRow2) === true
-        ) : false;
 
+        const excelRow1 = i + 1;
+        const isExcelCellYellow = sheetYellowMap ? (sheetYellowMap.get(excelRow1) === true) : false;
         const hasDupInNote = note.includes("중복");
-        const isMissingDupColor = hasDupInNote && !isRowYellow;
+        const isMissingDupColor = hasDupInNote && !isExcelCellYellow;
 
         rows.push({
-          rowIdx: i + 1,
-          sheetName: sheetName,
+          rowIdx: excelRow1,
+          sheetName: programName,
+          originalSheetName: originalSheetName,
           no: no,
           regNo: regNo,
           name: name,
@@ -1556,7 +1628,7 @@
           totalDisabilityAccum: totalDisabilityAccum,
           accumCount: accumCount,
           note: note,
-          isNoteYellow: isRowYellow,
+          isNoteYellow: isExcelCellYellow,
           hasDupInNote: hasDupInNote,
           isMissingDupColor: isMissingDupColor,
           rawRow: r
@@ -1565,7 +1637,15 @@
       return rows;
     }
 
-    function calcSheetVStats(sheetName, rows, rawSheet) {
+    function parseSheetRows(sheet, sheetName, isSummary) {
+      if (!sheet) return [];
+      const sections = parseSheetIntoSections(sheet, sheetName, excelYellowStyles);
+      const allRows = [];
+      sections.forEach(s => allRows.push(...s.rows));
+      return allRows;
+    }
+
+    function calcSheetVStats(sheetName, rows, rawSheet, customFooterRow, customFooterNextRow, originalSheetName) {
       let accumCount = 0;
       let groupCount = 0;
       let groupAccumSum = 0;
@@ -1755,49 +1835,31 @@
         noSeqStatusText = noSeqIssues[0] || "번호 순서 오류";
       }
 
-      // ★ [2. 시트 합계(계) 행 전수 대조 검증 - 한 시트에 계 행이 여러 개(올망졸망1, 올망졸망2 등) 있어도 통합 합산 대조!]
+      // ★ [2. 시트 합계(계) 행 전수 대조 검증]
       const sumIssues = [];
-      const json = XLSX.utils.sheet_to_json(rawSheet, { header: 1, defval: "" });
       let sheetRecordedActual = null;
-      let sheetFooterRow = null;
-      let sheetFooterNextRow = null;
+      let sheetFooterRow = customFooterRow || null;
+      let sheetFooterNextRow = customFooterNextRow || null;
       let sheetFooterRowIdx = null;
 
-      const footerRows = [];
-      for (let i = 0; i < json.length; i++) {
-        const row = json[i];
-        if (!row || !Array.isArray(row)) continue;
-        const hasGye = row.slice(0, 5).some(cell => String(cell || '').trim() === "계") || String(row[0] || '').trim() === "계";
-        if (hasGye) {
-          const nextR = (i + 1 < json.length) ? json[i + 1] : [];
-          footerRows.push({ rowIdx: i + 1, row: row, nextRow: nextR });
+      if (!sheetFooterRow && rawSheet) {
+        const json = XLSX.utils.sheet_to_json(rawSheet, { header: 1, defval: "" });
+        const footerRows = [];
+        for (let i = 0; i < json.length; i++) {
+          const row = json[i];
+          if (!row || !Array.isArray(row)) continue;
+          const hasGye = row.slice(0, 5).some(cell => String(cell || '').trim() === "계") || String(row[0] || '').trim() === "계";
+          if (hasGye) {
+            const nextR = (i + 1 < json.length) ? json[i + 1] : [];
+            footerRows.push({ rowIdx: i + 1, row: row, nextRow: nextR });
+          }
         }
-      }
 
-      if (footerRows.length > 1) {
-        // 복수의 계 행이 있는 경우(올망졸망1 + 올망졸망2): 각 열의 수치를 합산한 가상 통합 계 행 생성!
-        const combRow = [];
-        const combNext = [];
-        for (let c = 0; c < 40; c++) {
-          let sumVal = 0;
-          let sumNext = 0;
-          footerRows.forEach(f => {
-            const v = parseInt(f.row[c]) || 0;
-            const vn = parseInt(f.nextRow[c]) || 0;
-            sumVal += v;
-            sumNext += vn;
-          });
-          combRow[c] = sumVal;
-          combNext[c] = sumNext;
+        if (footerRows.length > 0) {
+          sheetFooterRow = footerRows[0].row;
+          sheetFooterNextRow = footerRows[0].nextRow;
+          sheetFooterRowIdx = footerRows[0].rowIdx;
         }
-        combRow[0] = "계";
-        sheetFooterRow = combRow;
-        sheetFooterNextRow = combNext;
-        sheetFooterRowIdx = footerRows[0].rowIdx;
-      } else if (footerRows.length === 1) {
-        sheetFooterRow = footerRows[0].row;
-        sheetFooterNextRow = footerRows[0].nextRow;
-        sheetFooterRowIdx = footerRows[0].rowIdx;
       }
 
       const calcTotalPersons = male + female;
@@ -1926,6 +1988,7 @@
 
       sheetSummaryMap.set(sheetName, {
         sheetName,
+        originalSheetName: originalSheetName || sheetName,
         vActualCount, // ★ V실적 실인원 (비고 '신규' 개인 + 단체 남·여 인원수)
         newPersonalCount, // 비고 '신규' 개인 인원수
         groupVActualCount, // 단체 남·여 실인원 합계
@@ -2686,24 +2749,25 @@
           }
         }
         if (!user.isGroup) {
-          const missingAgeParts = parts.filter(p => !p.age || p.age <= 0);
-          if (missingAgeParts.length > 0 || !user.age || user.age <= 0) {
+          const isMissingAgeVal = a => (a === null || a === undefined || isNaN(a) || a < 0);
+          const missingAgeParts = parts.filter(p => isMissingAgeVal(p.age));
+          if (missingAgeParts.length > 0 || isMissingAgeVal(user.age)) {
             const targetSheets = missingAgeParts.length > 0 ? missingAgeParts : parts;
             user.issues.push({
               type: "error",
               code: "MISSING_AGE_ERROR",
               title: "🚨 연령(나이) 누락 오류 (필수 입력 항목)",
-              desc: `개인 이용자는 연령(나이)이 필수 기재되어야 합니다. 아래 사업 시트에서 나이가 누락되었거나 0으로 기재되어 있으니 해당 시트에 정확한 나이를 입력해 주세요!`,
+              desc: `개인 이용자는 연령(나이)이 필수 기재되어야 합니다. 아래 사업 시트에서 나이가 누락되어 있으니 해당 시트에 정확한 나이를 입력해 주세요! (영아 0세는 정상 입력 인정)`,
               sheets: targetSheets.map(p => ({
                 sheet: p.sheetName,
                 row: p.rowIdx,
-                val: `연령: 미기재 (빈칸 또는 0)`
+                val: `연령: 미기재 (빈칸)`
               }))
             });
           }
         }
 
-        const agesInParts = [...new Set(parts.map(p => p.age).filter(a => a > 0))];
+        const agesInParts = [...new Set(parts.map(p => p.age).filter(a => a !== null && a !== undefined && !isNaN(a) && a >= 0))];
         if (agesInParts.length > 1) {
           const detailMsg = parts.map(p => `[${p.sheetName} 시트 ${p.rowIdx}행] ${p.age}세`).join(" vs ");
           user.issues.push({
@@ -6259,7 +6323,7 @@
           <div class="flex items-center gap-2.5 flex-wrap">
             <div class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-800 font-extrabold text-xs sm:text-sm border border-slate-300 flex items-center gap-1.5 shadow-2xs">
               <span class="text-indigo-600">📁</span>
-              <span>[${escapeHtml(sheetName)}] 시트 전체 명단</span>
+              <span>[${escapeHtml(sheetName)}] 전체 명단${(sStat.originalSheetName && sStat.originalSheetName !== sheetName) ? ` <span class="text-slate-400 font-normal text-xs">(원본: ${escapeHtml(sStat.originalSheetName)} 시트)</span>` : ''}</span>
             </div>
 
             <!-- ★ [사용자 요청 2] 연인원 '명' 표기 + 'V실적과 확인하세요!' 문구 강력 강조 -->
@@ -6350,7 +6414,7 @@
         const regCls = isRegMissing ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "font-mono";
         const noteCls = isEstimatedSevErr 
           ? "bg-red-200 text-red-950 font-black border-2 border-red-500" 
-          : (r.isNoteYellow || r.hasDupInNote ? "bg-yellow-200 text-amber-950 font-bold" : "");
+          : (r.hasDupInNote ? "bg-yellow-200 text-amber-950 font-bold" : "");
 
         const sevCls = isEstimatedSevErr ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "";
         const othCls = isSeniorMissing ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "";
@@ -6376,7 +6440,7 @@
             </td>
             <td ${isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : ''} class="${maleCellCls} ${isMixedGenderGroupErr ? 'cursor-pointer hover:opacity-80' : ''}" title="${genderTitle}">${r.maleCount > 0 ? r.maleCount : ''}</td>
             <td ${isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : ''} class="${femaleCellCls} ${isMixedGenderGroupErr ? 'cursor-pointer hover:opacity-80' : ''}" title="${genderTitle}">${r.femaleCount > 0 ? r.femaleCount : ''}</td>
-            <td class="num-col">${r.age > 0 ? r.age : ''}</td>
+            <td class="num-col">${(r.age !== null && r.age !== undefined && r.age >= 0) ? r.age : (r.isGroup ? '' : '<span class="text-red-600 font-black">누락</span>')}</td>
             <td ${isEstimatedSevErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-estimated\')"' : ''} class="num-col ${sevCls} ${isEstimatedSevErr ? 'cursor-pointer hover:opacity-80' : ''}">${r.rawSevActual > 0 ? r.rawSevActual : ''}</td>
             <td ${isEstimatedSevErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-estimated\')"' : ''} class="num-col ${sevCls} ${isEstimatedSevErr ? 'cursor-pointer hover:opacity-80' : ''}">${r.rawSevAccum > 0 ? r.rawSevAccum : ''}</td>
             <td class="num-col">${r.rawMildActual > 0 ? r.rawMildActual : ''}</td>
