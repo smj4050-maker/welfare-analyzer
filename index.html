@@ -432,8 +432,8 @@
           </div>
         </div>
 
-        <!-- 2단계 하단: 왼쪽 총괄 명단 표 + 오른쪽 불일치 가이드 패널 -->
-        <div class="flex-1 flex flex-col lg:flex-row gap-3 w-full items-stretch overflow-hidden">
+        <!-- 2단계 하단: 왼쪽 총괄 명단 표 + 오른쪽 불일치 가이드 패널 (스크롤 따라오기 sticky 지원) -->
+        <div class="flex-1 flex flex-col lg:flex-row gap-3 w-full items-start">
           <div id="leftTablePanel" class="flex-1 min-w-0 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300">
           
           <div class="p-2.5 border-b border-slate-200 bg-slate-50 sticky top-0 z-30 shadow-xs flex flex-wrap items-center justify-between gap-2">
@@ -461,12 +461,28 @@
                 🗑️ 행 삭제
               </button>
 
-              <div class="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-sm">
-                <button onclick="setFilter('all')" id="filterBtn-all" class="px-2.5 py-1 rounded-md font-semibold bg-indigo-50 text-indigo-700 text-sm">전체</button>
-                <button onclick="setFilter('errorOnly')" id="filterBtn-errorOnly" class="px-2 py-1 rounded-md font-medium text-slate-600 hover:text-red-600 text-sm">⚠️ 오류</button>
-                <button onclick="setFilter('editedOnly')" id="filterBtn-editedOnly" class="px-2 py-1 rounded-md font-medium text-slate-600 hover:text-purple-600 text-sm">✏️ 수정</button>
-                <button onclick="setFilter('groupOnly')" id="filterBtn-groupOnly" class="px-2 py-1 rounded-md font-medium text-slate-600 hover:text-slate-900 text-sm">🏢 단체</button>
-                <button onclick="setFilter('duplicateName')" id="filterBtn-duplicateName" class="px-2 py-1 rounded-md font-medium text-slate-600 hover:text-amber-600 text-sm">동명이인</button>
+              <!-- ★ [사용자 요청: 한눈에 확 들어오는 명확한 필터 탭 바 (색상/그림자/배지 강화)] -->
+              <div class="inline-flex items-center rounded-xl border-2 border-slate-300 bg-slate-200/90 p-1 text-xs gap-1 shadow-inner">
+                <button onclick="setFilter('all')" id="filterBtn-all" class="px-3 py-1.5 rounded-lg font-black bg-slate-900 text-white shadow-md ring-2 ring-slate-400 scale-[1.03] transition-all flex items-center gap-1 cursor-pointer" title="모든 이용자 전체 명단을 표시합니다">
+                  <span>👥 전체</span>
+                  <span id="filterAllBadge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-700 text-slate-100 font-bold">0</span>
+                </button>
+                <button onclick="setFilter('errorOnly')" id="filterBtn-errorOnly" class="px-2.5 py-1.5 rounded-lg font-bold bg-white text-rose-700 hover:bg-rose-50 border border-rose-200 transition-all flex items-center gap-1 cursor-pointer" title="오류가 있는 이용자만 모아봅니다">
+                  <span>⚠️ 오류</span>
+                  <span id="filterErrorBadge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-100 text-rose-800 font-bold">0</span>
+                </button>
+                <button onclick="setFilter('editedOnly')" id="filterBtn-editedOnly" class="px-2.5 py-1.5 rounded-lg font-bold bg-white text-purple-700 hover:bg-purple-50 border border-purple-200 transition-all flex items-center gap-1 cursor-pointer" title="내가 직접 수정한 이용자만 모아봅니다">
+                  <span>✏️ 수정</span>
+                  <span id="filterEditedBadge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-purple-100 text-purple-800 font-bold">0</span>
+                </button>
+                <button onclick="setFilter('groupOnly')" id="filterBtn-groupOnly" class="px-2.5 py-1.5 rounded-lg font-bold bg-white text-blue-700 hover:bg-blue-50 border border-blue-200 transition-all flex items-center gap-1 cursor-pointer" title="단체 이용자만 모아봅니다">
+                  <span>🏢 단체</span>
+                  <span id="filterGroupBadge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-blue-100 text-blue-800 font-bold">0</span>
+                </button>
+                <button onclick="setFilter('duplicateName')" id="filterBtn-duplicateName" class="px-2.5 py-1.5 rounded-lg font-bold bg-white text-amber-900 hover:bg-amber-50 border border-amber-300 transition-all flex items-center gap-1 cursor-pointer" title="시트 2개 이상에 걸친 동명이인 대상자만 모아봅니다">
+                  <span>👥 동명이인</span>
+                  <span id="filterHomonymBadge" class="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-200 text-amber-950 font-black">0</span>
+                </button>
               </div>
 
               <input type="text" id="searchInput" placeholder="검색..." oninput="handleSearch(this.value)"
@@ -484,6 +500,19 @@
                 ↔️ 가이드창 접기
               </button>
             </div>
+          </div>
+
+          <!-- ★ [필터 적용 중 알림 배너: 내가 지금 어디 탭에 있는지 명확히 보여주고 언제든 1초 만에 전체 명단 복귀!] -->
+          <div id="activeFilterAlertBar" class="hidden px-4 py-2.5 bg-gradient-to-r from-amber-100 via-amber-50 to-orange-100 border-b-2 border-amber-300 flex items-center justify-between gap-2 shadow-2xs">
+            <div class="flex items-center gap-2 text-xs sm:text-sm font-extrabold text-amber-950 flex-wrap">
+              <span class="text-base animate-bounce">🔍</span>
+              <span>현재 <strong id="activeFilterName" class="text-amber-950 bg-amber-200 px-2.5 py-0.5 rounded-md border border-amber-400 font-black">[동명이인]</strong> 명단만 모아보는 중입니다.</span>
+              <span id="activeFilterCountText" class="text-xs text-amber-800 font-bold bg-white/80 px-2 py-0.5 rounded border border-amber-200">(조회 0건 / 전체 0명)</span>
+            </div>
+            <button onclick="setFilter('all')" class="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-black text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer shrink-0 hover:scale-105" title="필터를 해제하고 전체 이용자 명단으로 즉시 돌아갑니다">
+              <span>👥</span>
+              <span>[전체 명단]으로 돌아가기 ➔</span>
+            </button>
           </div>
 
           <div id="excelSummaryTableContainer" class="flex-1 overflow-auto bg-white">
@@ -540,8 +569,8 @@
           </div>
         </div>
 
-        <!-- 오른쪽 패널: 불일치 가이드 패널 (가독성 향상을 위해 너비 여유 확보) -->
-        <div id="rightDetailPanel" class="w-full lg:w-[330px] xl:w-[360px] shrink-0 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300">
+        <!-- 오른쪽 패널: 불일치 가이드 패널 (스크롤 내릴 때 화면 상단에 착 붙어서 따라오는 sticky 고정) -->
+        <div id="rightDetailPanel" class="w-full lg:w-[330px] xl:w-[360px] shrink-0 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300 lg:sticky lg:top-[76px] lg:max-h-[calc(100vh-88px)]">
           <div class="p-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
             <span class="font-extrabold text-slate-900 text-sm sm:text-base">🔍 시트별 불일치 가이드</span>
             <div class="flex items-center gap-1.5">
@@ -957,7 +986,7 @@
     let isSidePanelCollapsed = false;
 
     let customActualUnanalyzed = 0;
-    let customAccumUnanalyzed = 1;
+    let customAccumUnanalyzed = 0;
     let editHistory = []; // 직접 수정한 내역 히스토리 목록
     let excelYellowStyles = { sheets: new Map() };
 
@@ -1220,6 +1249,7 @@
       try {
         editHistory = [];
         updateEditHistoryBadge();
+        customAccumUnanalyzed = 0; // ★ [사용자 요청: 미분석 연인원 기본상태 0건 유지 (필요 시 직접 기입)]
         programSheetsData = [];
         sheetSummaryMap = new Map();
         originalSummarySheetData = [];
@@ -3077,19 +3107,84 @@
       } else if (activeFilter === 'groupOnly') {
         filtered = filtered.filter(u => u.isGroup);
       } else if (activeFilter === 'duplicateName') {
-        filtered = filtered.filter(u => !u.isGroup && (/\d$/.test(u.name) || u.issues.some(i => i.code === 'HOMONYM_NOT_DISTINGUISHED' || i.code === 'HOMONYM_CHECK')));
+        // ★ [사용자 요청: 시트 2개 이상 동명이인이 있을 때만 표출! 단독 1개 시트에만 있는 이용자는 제외!]
+        filtered = filtered.filter(u => {
+          if (u.isGroup) return false;
+
+          // 1) 동명이인 식별 이슈가 있는 대상자 (2순위 성명 수정 필요, 1순위 유지자)
+          const hasHomonymIssue = u.issues && u.issues.some(i => i.code === 'HOMONYM_NOT_DISTINGUISHED' || i.code === 'HOMONYM_CHECK');
+          if (hasHomonymIssue) return true;
+
+          // 2) 참여한 사업 시트 수가 2개 이상이면서 이름 끝에 숫자가 있는 대상자
+          // (단독으로 1개 시트에만 이름있는 이현준3, 박정숙5 등은 완벽히 제외!)
+          const sheetCount = (u.participations && u.participations.length) || 0;
+          if (/\d$/.test(u.name) && sheetCount >= 2) return true;
+
+          // 3) 기본 성명이 같은 다른 대상자가 파일 내에 존재하면서 여러 시트에 걸쳐 있는 경우
+          const baseName = (u.name || "").replace(/\d+$/, '').trim();
+          if (baseName) {
+            const sameBaseUsers = aggregatedUsers.filter(x => !x.isGroup && (x.name || "").replace(/\d+$/, '').trim() === baseName);
+            if (sameBaseUsers.length >= 2) {
+              const allSheets = new Set();
+              sameBaseUsers.forEach(x => (x.participations || []).forEach(p => allSheets.add(p.sheetName)));
+              if (allSheets.size >= 2) return true;
+            }
+          }
+
+          return false;
+        });
       }
 
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
-        filtered = filtered.filter(u => u.name.toLowerCase().includes(q) || (u.regNo && u.regNo.toLowerCase().includes(q)));
+        filtered = filtered.filter(u => (u.name || "").toLowerCase().includes(q) || (u.regNo && u.regNo.toLowerCase().includes(q)));
       }
 
-      const totalEditedCount = aggregatedUsers.filter(u => u.isEdited || (u.editRecords && u.editRecords.length > 0)).length;
-      const filterEditedEl = document.getElementById('filterEditedCount');
-      if (filterEditedEl) filterEditedEl.textContent = totalEditedCount;
+      // 각 탭별 건수 실시간 계산
+      const totalAll = aggregatedUsers.length;
+      const totalErrors = aggregatedUsers.filter(u => u.issues.some(i => i.type === 'error')).length;
+      const totalEdited = aggregatedUsers.filter(u => u.isEdited || (u.editRecords && u.editRecords.length > 0)).length;
+      const totalGroup = aggregatedUsers.filter(u => u.isGroup).length;
+      const totalHomonym = aggregatedUsers.filter(u => {
+        if (u.isGroup) return false;
+        const hasHomonymIssue = u.issues && u.issues.some(i => i.code === 'HOMONYM_NOT_DISTINGUISHED' || i.code === 'HOMONYM_CHECK');
+        if (hasHomonymIssue) return true;
+        const sheetCount = (u.participations && u.participations.length) || 0;
+        if (/\d$/.test(u.name) && sheetCount >= 2) return true;
+        const baseName = (u.name || "").replace(/\d+$/, '').trim();
+        if (baseName) {
+          const sameBaseUsers = aggregatedUsers.filter(x => !x.isGroup && (x.name || "").replace(/\d+$/, '').trim() === baseName);
+          if (sameBaseUsers.length >= 2) {
+            const allSheets = new Set();
+            sameBaseUsers.forEach(x => (x.participations || []).forEach(p => allSheets.add(p.sheetName)));
+            if (allSheets.size >= 2) return true;
+          }
+        }
+        return false;
+      }).length;
 
-      document.getElementById('filteredCountBadge').textContent = `조회 ${filtered.length}건 / 전체 ${aggregatedUsers.length}건`;
+      // 상단 필터 탭 배지 숫자 실시간 동기화
+      const bAll = document.getElementById('filterAllBadge');
+      if (bAll) bAll.textContent = totalAll;
+      const bErr = document.getElementById('filterErrorBadge');
+      if (bErr) bErr.textContent = totalErrors;
+      const bEd = document.getElementById('filterEditedBadge');
+      if (bEd) bEd.textContent = totalEdited;
+      const bGrp = document.getElementById('filterGroupBadge');
+      if (bGrp) bGrp.textContent = totalGroup;
+      const bHom = document.getElementById('filterHomonymBadge');
+      if (bHom) bHom.textContent = totalHomonym;
+
+      const filterEditedEl = document.getElementById('filterEditedCount');
+      if (filterEditedEl) filterEditedEl.textContent = totalEdited;
+
+      const badgeEl = document.getElementById('filteredCountBadge');
+      if (badgeEl) badgeEl.textContent = `조회 ${filtered.length}건 / 전체 ${aggregatedUsers.length}건`;
+
+      const alertCountEl = document.getElementById('activeFilterCountText');
+      if (alertCountEl) alertCountEl.textContent = `(조회 ${filtered.length}건 / 전체 ${aggregatedUsers.length}명)`;
+
+      updateFilterButtonsUi();
 
       const tbody = document.getElementById('excelSummaryTableBody');
       tbody.innerHTML = '';
@@ -3110,7 +3205,7 @@
             name: user.name || "",
             maleCell: user.maleCell > 0 ? String(user.maleCell) : "",
             femaleCell: user.femaleCell > 0 ? String(user.femaleCell) : "",
-            age: user.age > 0 ? String(user.age) : "",
+            age: (user.age !== null && user.age !== undefined && user.age >= 0) ? String(user.age) : "",
             sevActual: user.sevActual > 0 ? String(user.sevActual) : "",
             sevAccum: user.sevAccum > 0 ? String(user.sevAccum) : "",
             mildActual: user.mildActual > 0 ? String(user.mildActual) : "",
@@ -3829,7 +3924,10 @@
       if (field.startsWith('dis_')) {
         const dtype = field.replace('dis_', '');
         user.disabilityCounts[dtype] = parseInt(oldVal) || 0;
-      } else if (['maleCell', 'femaleCell', 'age', 'sevActual', 'sevAccum', 'mildActual', 'mildAccum', 'recActual', 'recAccum', 'nearActual', 'nearAccum', 'othActual', 'othAccum'].includes(field)) {
+      } else if (field === 'age') {
+        const parsedAge = parseInt(oldVal);
+        user.age = (!isNaN(parsedAge) && parsedAge >= 0 && oldVal !== "") ? parsedAge : null;
+      } else if (['maleCell', 'femaleCell', 'sevActual', 'sevAccum', 'mildActual', 'mildAccum', 'recActual', 'recAccum', 'nearActual', 'nearAccum', 'othActual', 'othAccum'].includes(field)) {
         user[field] = parseInt(oldVal) || 0;
       } else {
         user[field] = oldVal;
@@ -6214,7 +6312,8 @@
             ? ` ➔ 권장성명: '${u.recommendedHomonymName}'` 
             : ` (1순위: 원래 성명 유지)`;
           const partsInfo = (u.participations || []).map(p => `[${p.sheetName} ${p.rowIdx}행]`).join(', ');
-          msg += `   • ${uIdx + 1}순위: ${u.regNo || '접수번호미기재'} | ${u.age || '?'}세 | ${u.gender || '?'} | 참여: ${partsInfo}${recText}\n`;
+          const ageStr = (u.age !== null && u.age !== undefined && u.age >= 0) ? `${u.age}세` : '?세';
+          msg += `   • ${uIdx + 1}순위: ${u.regNo || '접수번호미기재'} | ${ageStr} | ${u.gender || '?'} | 참여: ${partsInfo}${recText}\n`;
         });
       });
 
@@ -6589,6 +6688,7 @@
 
       const panel = document.getElementById('detailPanelContent');
       panel.innerHTML = '';
+      panel.scrollTop = 0;
 
       // ★ 직접 수정한 내역이 있는 경우 최상단에 수정 내역 안내 카드 표시!
       if (user.editRecords && user.editRecords.length > 0) {
@@ -6660,9 +6760,10 @@
           if (user.mildActual > 0 || user.mildAccum > 0) sevLabels.push(`경증(실${user.mildActual},연${user.mildAccum})`);
           const sevDisplay = sevLabels.length > 0 ? sevLabels.join(", ") : (user.severity || "미상");
 
-          const ageDisplay = (!user.age || user.age <= 0) 
-            ? `<span class="text-red-600 font-black">🚨미기재(누락)</span>` 
-            : `${user.age}세`;
+          const isUserAgeValid = user.age !== null && user.age !== undefined && user.age !== "" && !isNaN(user.age) && user.age >= 0;
+          const ageDisplay = isUserAgeValid 
+            ? `${user.age}세` 
+            : `<span class="text-red-600 font-black">🚨미기재(누락)</span>`;
 
           const hasDup = user.note && user.note.includes("중복");
           const noteDisplay = hasDup
@@ -6670,15 +6771,39 @@
             : (user.note ? escapeHtml(user.note) : "없음");
 
           return `
-            <div class="grid grid-cols-4 gap-2.5 text-sm text-slate-700 mt-2.5 pt-2.5 border-t border-slate-200">
-              <div><span class="text-slate-500 font-medium">성별:</span> <strong class="text-base font-bold text-slate-900">${user.gender || "미상"}</strong></div>
-              <div><span class="text-slate-500 font-medium">연령:</span> <strong class="text-base font-bold text-slate-900">${ageDisplay}</strong></div>
-              <div class="col-span-2"><span class="text-slate-500 font-medium">장애정도:</span> <strong class="text-base font-bold text-slate-900">${sevDisplay}</strong></div>
-              <div class="col-span-4 mt-1"><span class="text-slate-500 font-medium">감면서비스:</span> <strong class="text-base font-bold text-slate-900">${discDisplay}</strong></div>
-            </div>
-            <div class="text-sm text-slate-700 mt-2 pt-2 border-t border-slate-200/80 flex items-center flex-wrap gap-2">
-              <div><span class="text-slate-500 font-medium">장애유형:</span> <strong class="text-base font-bold text-indigo-900">${user.mainDisability}</strong></div>
-              <div class="ml-2"><span class="text-slate-500 font-medium">비고:</span> <strong class="text-base">${noteDisplay}</strong></div>
+            <div class="space-y-2 text-sm text-slate-700 mt-2.5 pt-2.5 border-t border-slate-200">
+              <!-- 1행: 성별 & 연령 (2분할로 넉넉하게 표시) -->
+              <div class="grid grid-cols-2 gap-2">
+                <div class="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                  <span class="text-xs text-slate-500 block font-medium mb-0.5">성별</span>
+                  <strong class="text-sm font-bold text-slate-900">${user.gender || "미상"}</strong>
+                </div>
+                <div class="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                  <span class="text-xs text-slate-500 block font-medium mb-0.5">연령(나이)</span>
+                  <strong class="text-sm font-bold text-slate-900">${ageDisplay}</strong>
+                </div>
+              </div>
+              <!-- 2행: 장애정도 (한 줄 전체 차지 - 좁은 사이드바에서도 글씨 깨짐/겹침 방지) -->
+              <div class="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                <span class="text-xs text-slate-500 block font-medium mb-0.5">장애정도</span>
+                <strong class="text-sm font-bold text-slate-900 break-words leading-tight">${sevDisplay}</strong>
+              </div>
+              <!-- 3행: 감면서비스 (한 줄 전체 차지) -->
+              <div class="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                <span class="text-xs text-slate-500 block font-medium mb-0.5">감면서비스</span>
+                <strong class="text-sm font-bold text-slate-900 break-words leading-tight">${discDisplay}</strong>
+              </div>
+              <!-- 4행: 장애유형 & 비고 (2분할) -->
+              <div class="grid grid-cols-2 gap-2">
+                <div class="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                  <span class="text-xs text-slate-500 block font-medium mb-0.5">장애유형</span>
+                  <strong class="text-sm font-bold text-indigo-900 break-words leading-tight">${user.mainDisability}</strong>
+                </div>
+                <div class="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                  <span class="text-xs text-slate-500 block font-medium mb-0.5">비고</span>
+                  <div class="text-sm break-words leading-tight mt-0.5">${noteDisplay}</div>
+                </div>
+              </div>
             </div>
           `;
         })()}
@@ -6878,9 +7003,10 @@
           ? `<span class="text-red-600 font-bold bg-red-50 px-1 py-0.5 rounded">미기재</span>`
           : escapeHtml(p.regNo);
 
-        const pAgeHtml = (!p.age || p.age <= 0)
-          ? `<span class="text-red-600 font-bold bg-red-50 px-1 py-0.5 rounded">미기재</span>`
-          : `${p.age}세`;
+        const isPAgeValid = p.age !== null && p.age !== undefined && p.age !== "" && !isNaN(p.age) && p.age >= 0;
+        const pAgeHtml = isPAgeValid
+          ? `${p.age}세`
+          : `<span class="text-red-600 font-bold bg-red-50 px-1 py-0.5 rounded">미기재</span>`;
 
         tableHtml += `
           <tr class="hover:bg-slate-50">
@@ -6967,17 +7093,61 @@
 
     function setFilter(filterType) {
       activeFilter = filterType;
-      ['all', 'errorOnly', 'editedOnly', 'groupOnly', 'duplicateName'].forEach(f => {
+      filterAndRenderExcelTable();
+    }
+
+    // ★ [사용자 요청: 상단 필터 탭 바 시각화 극대화 & 현재 활성 탭 초강조]
+    function updateFilterButtonsUi() {
+      const filterDefs = {
+        all: {
+          activeCls: "px-3 py-1.5 rounded-lg font-black bg-slate-900 text-white shadow-md ring-2 ring-slate-400 scale-[1.03]",
+          inactiveCls: "px-2.5 py-1.5 rounded-lg font-bold bg-white text-slate-700 hover:bg-slate-200 border border-slate-300",
+          nameText: "[전체 명단]"
+        },
+        errorOnly: {
+          activeCls: "px-3 py-1.5 rounded-lg font-black bg-rose-600 text-white shadow-md ring-2 ring-rose-300 scale-[1.03]",
+          inactiveCls: "px-2.5 py-1.5 rounded-lg font-bold bg-white text-rose-700 hover:bg-rose-50 border border-rose-200",
+          nameText: "[⚠️ 오류 발생 대상자]"
+        },
+        editedOnly: {
+          activeCls: "px-3 py-1.5 rounded-lg font-black bg-purple-600 text-white shadow-md ring-2 ring-purple-300 scale-[1.03]",
+          inactiveCls: "px-2.5 py-1.5 rounded-lg font-bold bg-white text-purple-700 hover:bg-purple-50 border border-purple-200",
+          nameText: "[✏️ 내가 직접 수정한 명단]"
+        },
+        groupOnly: {
+          activeCls: "px-3 py-1.5 rounded-lg font-black bg-blue-600 text-white shadow-md ring-2 ring-blue-300 scale-[1.03]",
+          inactiveCls: "px-2.5 py-1.5 rounded-lg font-bold bg-white text-blue-700 hover:bg-blue-50 border border-blue-200",
+          nameText: "[🏢 단체 이용 건]"
+        },
+        duplicateName: {
+          activeCls: "px-3 py-1.5 rounded-lg font-black bg-amber-500 text-white shadow-md ring-2 ring-amber-300 scale-[1.03]",
+          inactiveCls: "px-2.5 py-1.5 rounded-lg font-bold bg-white text-amber-900 hover:bg-amber-50 border border-amber-300",
+          nameText: "[👥 시트 2개 이상 동명이인]"
+        }
+      };
+
+      Object.keys(filterDefs).forEach(f => {
         const btn = document.getElementById(`filterBtn-${f}`);
-        if (btn) {
-          if (f === filterType) {
-            btn.className = "px-2 py-1 rounded-md font-semibold bg-indigo-50 text-indigo-700 shadow-2xs";
-          } else {
-            btn.className = "px-2 py-1 rounded-md font-medium text-slate-600 hover:text-indigo-600";
-          }
+        if (!btn) return;
+        const conf = filterDefs[f];
+        if (f === activeFilter) {
+          btn.className = `${conf.activeCls} flex items-center gap-1 cursor-pointer transition-all`;
+        } else {
+          btn.className = `${conf.inactiveCls} flex items-center gap-1 cursor-pointer transition-all`;
         }
       });
-      filterAndRenderExcelTable();
+
+      const alertBar = document.getElementById('activeFilterAlertBar');
+      const nameEl = document.getElementById('activeFilterName');
+      if (alertBar && nameEl) {
+        if (activeFilter === 'all') {
+          alertBar.classList.add('hidden');
+        } else {
+          alertBar.classList.remove('hidden');
+          const conf = filterDefs[activeFilter];
+          nameEl.textContent = conf ? conf.nameText : `[${activeFilter}]`;
+        }
+      }
     }
 
     function handleSearch(val) {
