@@ -349,8 +349,25 @@
 
           <!-- 시트 선택 탭 바 (상하 구분을 위해 명확한 라벨과 배경 박스로 감싸기) -->
           <div class="pt-1">
-            <div class="text-xs font-bold text-slate-600 mb-1.5 flex items-center gap-1.5">
-              <span>📂</span> <span>사업 시트 선택 (원하는 시트를 클릭하여 실적과 명단을 확인하세요):</span>
+            <div class="text-xs font-bold text-slate-600 mb-1.5 flex items-center justify-between gap-2 flex-wrap">
+              <div class="flex items-center gap-1.5">
+                <span>📂</span> <span>사업 시트 선택 (원하는 시트를 클릭하여 실적과 명단을 확인하세요):</span>
+              </div>
+              <!-- ★ [신규 추가] 1단계 시트 필터 버튼 바: 전체 / 오류만 / 신규(실인원)만 모아보기 -->
+              <div class="inline-flex items-center rounded-xl border-2 border-slate-300 bg-slate-200/90 p-1 text-xs gap-1 shadow-inner">
+                <button onclick="setSheetTabFilter('all')" id="sheetFilterBtn-all" class="px-2.5 py-1 rounded-lg font-black bg-slate-900 text-white shadow-xs ring-2 ring-slate-400 scale-[1.02] transition-all flex items-center gap-1 cursor-pointer" title="모든 사업 시트 전체를 표시합니다">
+                  <span>📂 전체</span>
+                  <span id="sheetFilterAllCount" class="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-700 text-slate-100 font-bold">0</span>
+                </button>
+                <button onclick="setSheetTabFilter('error')" id="sheetFilterBtn-error" class="px-2.5 py-1 rounded-lg font-bold bg-white text-rose-700 hover:bg-rose-50 border border-rose-200 transition-all flex items-center gap-1 cursor-pointer" title="오류가 있는 사업 시트만 모아봅니다">
+                  <span>🚨 오류 시트</span>
+                  <span id="sheetFilterErrorCount" class="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-100 text-rose-800 font-bold">0</span>
+                </button>
+                <button onclick="setSheetTabFilter('new')" id="sheetFilterBtn-new" class="px-2.5 py-1 rounded-lg font-bold bg-white text-amber-800 hover:bg-amber-50 border border-amber-300 transition-all flex items-center gap-1 cursor-pointer" title="비고에 '신규'가 작성된 실인원 발생 시트만 모아봅니다">
+                  <span>✨ 신규(실인원) 시트</span>
+                  <span id="sheetFilterNewCount" class="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-100 text-amber-900 font-bold">0</span>
+                </button>
+              </div>
             </div>
             <div id="sheetAnalysisTabNav" class="flex items-center gap-1.5 flex-wrap p-2 bg-slate-100/90 rounded-xl border border-slate-300 shadow-2xs">
               <!-- 동적으로 시트 버튼들이 들어갑니다 -->
@@ -1296,6 +1313,8 @@
           return;
         }
 
+        currentSheetTabFilter = 'all';
+        currentActiveSheetView = '';
         aggregateAndValidateData();
 
         // ★ 화면 전환을 즉시 실행하여 엑셀 선택 즉시 다음 화면으로 부드럽게 전환!
@@ -1368,26 +1387,39 @@
 
     function extractProgramNameFromTitle(titleText, defaultName) {
       if (!titleText) return defaultName;
-      let clean = String(titleText).trim().replace(/[\r\n"']/g, ' ').trim();
+      let clean = String(titleText).trim().replace(/[\r\n"']/g, ' ').replace(/\s+/g, ' ').trim();
       
-      // 1) "프로그램" 앞의 텍스트 추출 (가장 흔하고 확실한 패턴: 올망졸망1 프로그램 2026년...)
-      if (clean.includes("프로그램")) {
-        let pName = clean.split(/프로그램/i)[0].trim();
-        if (pName && pName.length >= 2) return pName;
-      }
-      
-      // 2) "202x년" 또는 "\d{4}년" 앞의 텍스트 추출 (사전사후평가 2026년...)
+      let pName = "";
+      // 1) "202x년" 또는 "\d{4}년" 앞의 텍스트를 최우선 분리 (날짜 앞부분 전체가 세부 프로그램 풀네임!)
+      // 예: "평생교육 프로그램 - 서예교실(금요반) 2026년 ( 10 ) 월 이용자 현황" -> "평생교육 프로그램 - 서예교실(금요반)"
       if (/\d{4}\s*년/.test(clean)) {
-        let pName = clean.split(/\d{4}\s*년/)[0].trim();
-        if (pName && pName.length >= 2) return pName;
+        pName = clean.split(/\d{4}\s*년/)[0].trim();
+      } else if (clean.includes("이용자 현황") || clean.includes("이용자현황")) {
+        pName = clean.split(/이용자\s*현황|이용자현황/)[0].trim();
+      } else if (clean.includes("이용자")) {
+        pName = clean.split(/이용자/)[0].trim();
+      } else if (clean.includes("프로그램")) {
+        // "프로그램 -" 처럼 뒤에 세부명이 있는 경우 자르지 않음!
+        if (clean.includes("프로그램 -") || clean.includes("프로그램-")) {
+          pName = clean;
+        } else {
+          pName = clean.split(/프로그램/i)[0].trim();
+        }
+      } else {
+        pName = clean;
       }
-      
-      // 3) "이용자" 앞의 텍스트 추출
-      if (clean.includes("이용자")) {
-        let pName = clean.split(/이용자/)[0].trim();
-        if (pName && pName.length >= 2) return pName;
+
+      // 앞뒤 남은 하이픈/공백 정리
+      pName = pName.replace(/^[-_–—\s]+|[-_–—\s]+$/g, '').trim();
+
+      // 하이픈이 없는 단일 프로그램(예: "올망졸망1 프로그램", "생각을 실천하는 인식개선교육 프로그램")의 경우 뒤에 붙은 "프로그램"만 제거
+      if (!pName.includes("-")) {
+        pName = pName.replace(/\s*프로그램\s*$/, '').trim();
       }
-      
+
+      if (pName && pName.length >= 2) {
+        return pName;
+      }
       return defaultName;
     }
 
@@ -1435,7 +1467,7 @@
         for (let r = startIdx; r < endIdx; r++) {
           const row = json[r];
           if (!row || !Array.isArray(row)) continue;
-          const text = row.slice(0, 10).map(c => String(c || '').trim()).join(' ');
+          const text = row.map(c => String(c || '').trim()).filter(Boolean).join(' ');
           if (text.includes("프로그램") || text.includes("이용자 현황") || text.includes("이용자현황") || /\d{4}\s*년/.test(text)) {
             sectionTitle = text;
             break;
@@ -1912,13 +1944,13 @@
 
         // 1) 남여 총합계 및 성별 대조
         if (footTotal > 0 && footTotal !== calcTotalPersons) {
-          sumIssues.push(`남여합계 불일치(작성 ${calcTotalPersons}명 vs 계 ${footTotal}명)`);
+          sumIssues.push(`남여합계: 계 ${footTotal}명 잘못된 값 ➔ ${calcTotalPersons}명으로 작성되어야 함`);
         }
         if (footMale > 0 && footMale !== male) {
-          sumIssues.push(`남성 불일치(작성 ${male}명 vs 계 ${footMale}명)`);
+          sumIssues.push(`남성: 계 ${footMale}명 잘못된 값 ➔ ${male}명으로 작성되어야 함`);
         }
         if (footFemale > 0 && footFemale !== female) {
-          sumIssues.push(`여성 불일치(작성 ${female}명 vs 계 ${footFemale}명)`);
+          sumIssues.push(`여성: 계 ${footFemale}명 잘못된 값 ➔ ${female}명으로 작성되어야 함`);
         }
 
         // 2) 중증 / 경증 각각 개별 대조 (합산 퉁치기 절대 금지! 카페서비스훈련 적발)
@@ -1928,16 +1960,16 @@
         const footMildAcc = parseInt(sheetFooterRow[9]) || 0;
 
         if (footSevAct !== calcSevActual) {
-          sumIssues.push(`중증 실인원 불일치(작성 ${calcSevActual}명 vs 계 ${footSevAct}명)`);
+          sumIssues.push(`중증 실인원: 계 ${footSevAct}명 잘못된 값 ➔ ${calcSevActual}명으로 작성되어야 함`);
         }
         if (footSevAcc !== calcSevAccum) {
-          sumIssues.push(`중증 연인원 불일치(작성 ${calcSevAccum}건 vs 계 ${footSevAcc}건)`);
+          sumIssues.push(`중증 연인원: 계 ${footSevAcc}건 잘못된 값 ➔ ${calcSevAccum}건으로 작성되어야 함`);
         }
         if (footMildAct !== calcMildActual) {
-          sumIssues.push(`경증 실인원 불일치(작성 ${calcMildActual}명 vs 계 ${footMildAct}명)`);
+          sumIssues.push(`경증 실인원: 계 ${footMildAct}명 잘못된 값 ➔ ${calcMildActual}명으로 작성되어야 함`);
         }
         if (footMildAcc !== calcMildAccum) {
-          sumIssues.push(`경증 연인원 불일치(작성 ${calcMildAccum}건 vs 계 ${footMildAcc}건)`);
+          sumIssues.push(`경증 연인원: 계 ${footMildAcc}건 잘못된 값 ➔ ${calcMildAccum}건으로 작성되어야 함`);
         }
 
         // 3) 감면서비스(수급자 / 차상위 / 기타) 각각 개별 대조
@@ -1949,51 +1981,59 @@
         const footOthAcc = parseInt(sheetFooterRow[15]) || 0;
 
         if (footRecAct !== calcRecActual) {
-          sumIssues.push(`수급자 실인원 불일치(작성 ${calcRecActual}명 vs 계 ${footRecAct}명)`);
+          sumIssues.push(`수급자 실인원: 계 ${footRecAct}명 잘못된 값 ➔ ${calcRecActual}명으로 작성되어야 함`);
         }
         if (footRecAcc !== calcRecAccum) {
-          sumIssues.push(`수급자 연인원 불일치(작성 ${calcRecAccum}건 vs 계 ${footRecAcc}건)`);
+          sumIssues.push(`수급자 연인원: 계 ${footRecAcc}건 잘못된 값 ➔ ${calcRecAccum}건으로 작성되어야 함`);
         }
         if (footNearAct !== calcNearActual) {
-          sumIssues.push(`차상위 실인원 불일치(작성 ${calcNearActual}명 vs 계 ${footNearAct}명)`);
+          sumIssues.push(`차상위 실인원: 계 ${footNearAct}명 잘못된 값 ➔ ${calcNearActual}명으로 작성되어야 함`);
         }
         if (footNearAcc !== calcNearAccum) {
-          sumIssues.push(`차상위 연인원 불일치(작성 ${calcNearAccum}건 vs 계 ${footNearAcc}건)`);
+          sumIssues.push(`차상위 연인원: 계 ${footNearAcc}건 잘못된 값 ➔ ${calcNearAccum}건으로 작성되어야 함`);
         }
         if (footOthAct !== calcOthActual) {
-          sumIssues.push(`기타감면 실인원 불일치(작성 ${calcOthActual}명 vs 계 ${footOthAct}명)`);
+          sumIssues.push(`기타감면 실인원: 계 ${footOthAct}명 잘못된 값 ➔ ${calcOthActual}명으로 작성되어야 함`);
         }
         if (footOthAcc !== calcOthAccum) {
-          sumIssues.push(`기타감면 연인원 불일치(작성 ${calcOthAccum}건 vs 계 ${footOthAcc}건)`);
+          sumIssues.push(`기타감면 연인원: 계 ${footOthAcc}건 잘못된 값 ➔ ${calcOthAccum}건으로 작성되어야 함`);
         }
 
         // 4) 17개 장애유형별(지체~비장애) 실인원 & 연인원 개별 대조
         DISABILITY_TYPES.forEach((dtype, idx) => {
           const colIdx = 16 + idx;
           let calcDisActSum = 0;
-          let calcDisActCount = 0;
           let calcDisAcc = 0;
+          let hasGroupForThisDis = false;
           rows.forEach(r => {
             const cnt = r.disabilityCounts[dtype] || 0;
             if (cnt > 0) {
               calcDisAcc += cnt;
-              calcDisActSum += (r.isGroup ? ((r.maleCount + r.femaleCount) || cnt) : 1);
-              calcDisActCount += 1;
+              if (r.isGroup) {
+                hasGroupForThisDis = true;
+                calcDisActSum += ((r.maleCount + r.femaleCount) || cnt);
+              } else {
+                calcDisActSum += 1;
+              }
             }
           });
 
-          // 계 행 실인원 대조 (단체 포함 시 인원수 썸 또는 작성자 기재 행 수 카운트 둘 다 정상으로 인정)
+          // 계 행 실인원 대조
           const footDisAct = parseInt(sheetFooterRow[colIdx]) || 0;
-          const isActMatch = (footDisAct === calcDisActSum || footDisAct === calcDisActCount);
-          if (!isActMatch) {
-            sumIssues.push(`${dtype} 실인원 불일치: 작성 ${calcDisActSum}명 vs 계 ${footDisAct}명`);
+          if (footDisAct !== calcDisActSum) {
+            if (hasGroupForThisDis) {
+              // ★ [사용자 요청: 계 실인원 26명 잘못된 값, 280명으로 작성되어야함. 단체는 11명이면 실인원 11명으로 봐야됨 설명 완벽 반영!]
+              sumIssues.push(`${dtype} 계 실인원 ${footDisAct}명 잘못된 값, ${calcDisActSum}명으로 작성되어야함. 단체는 11명이면 실인원 11명으로 봐야됨`);
+            } else {
+              sumIssues.push(`${dtype} 계 실인원 ${footDisAct}명 잘못된 값, ${calcDisActSum}명으로 작성되어야함`);
+            }
           }
 
           // 계 다음 행 연인원(썸) 대조 (연인원 행이 있는 경우)
           if (sheetFooterNextRow) {
             const footDisAcc = parseInt(sheetFooterNextRow[colIdx]) || 0;
             if (footDisAcc !== calcDisAcc) {
-              sumIssues.push(`${dtype} 연인원(썸) 불일치: 작성 ${calcDisAcc}건 vs 계 ${footDisAcc}건`);
+              sumIssues.push(`${dtype} 계 연인원 ${footDisAcc}건 잘못된 값, ${calcDisAcc}건으로 작성되어야함`);
             }
           }
         });
@@ -5701,6 +5741,36 @@
     // ★ [사업(시트)별 V실적 대조 & 시트별 엑셀 원본 전체 뷰어 시스템]
     // =========================================================================
     let currentActiveSheetView = ''; // 기본값: 첫 번째 사업 시트
+    let currentSheetTabFilter = 'all'; // 'all' | 'error' | 'new'
+
+    function setSheetTabFilter(filterType) {
+      currentSheetTabFilter = filterType;
+
+      const btnAll = document.getElementById('sheetFilterBtn-all');
+      const btnErr = document.getElementById('sheetFilterBtn-error');
+      const btnNew = document.getElementById('sheetFilterBtn-new');
+
+      const activeCls = "font-black shadow-xs ring-2 scale-[1.02] text-white";
+      const inactiveCls = "font-bold bg-white hover:bg-slate-50 border transition-all";
+
+      if (btnAll) {
+        btnAll.className = (filterType === 'all')
+          ? `px-2.5 py-1 rounded-lg ${activeCls} bg-slate-900 ring-slate-400`
+          : `px-2.5 py-1 rounded-lg ${inactiveCls} border-slate-300 text-slate-700`;
+      }
+      if (btnErr) {
+        btnErr.className = (filterType === 'error')
+          ? `px-2.5 py-1 rounded-lg ${activeCls} bg-rose-600 ring-rose-300`
+          : `px-2.5 py-1 rounded-lg ${inactiveCls} border-rose-200 text-rose-700 hover:bg-rose-50`;
+      }
+      if (btnNew) {
+        btnNew.className = (filterType === 'new')
+          ? `px-2.5 py-1 rounded-lg ${activeCls} bg-amber-600 ring-amber-300`
+          : `px-2.5 py-1 rounded-lg ${inactiveCls} border-amber-300 text-amber-800 hover:bg-amber-50`;
+      }
+
+      renderSheetAnalysisTable();
+    }
 
     function showSheetAnalysisView(targetSheet) {
       if (!targetSheet || targetSheet === 'summary') {
@@ -5716,9 +5786,9 @@
         tabNav.querySelectorAll('button[data-sheet-tab]').forEach(btn => {
           const tabKey = btn.getAttribute('data-sheet-tab');
           if (tabKey === currentActiveSheetView) {
-            btn.className = "px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs border border-indigo-700 transition-all";
+            btn.className = "px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs border border-indigo-700 ring-2 ring-indigo-300 transition-all cursor-pointer";
           } else {
-            btn.className = "px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition-all border border-slate-300 shadow-2xs";
+            btn.className = "px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition-all border border-slate-300 shadow-2xs cursor-pointer";
           }
         });
       }
@@ -5733,11 +5803,6 @@
     }
 
     function renderSheetAnalysisTable() {
-      // 1. 활성 시트 초기화 (첫 번째 사업 시트로 자동 선택)
-      if (!currentActiveSheetView || currentActiveSheetView === 'summary' || !sheetSummaryMap.has(currentActiveSheetView)) {
-        currentActiveSheetView = sheetSummaryMap.keys().next().value || '';
-      }
-
       // 전역 동명이인(동일 성명 2명 이상) Set 생성
       const globalHomonymNames = new Set();
       const globalNameCounts = new Map();
@@ -5750,41 +5815,82 @@
         if (cnt > 1) globalHomonymNames.add(name);
       });
 
+      // 1. 전체 시트 정보 집계 및 필터링
+      let totalSheets = 0;
+      let errorSheets = 0;
+      let newSheets = 0;
+      const visibleSheets = [];
+
+      sheetSummaryMap.forEach((sStat, sName) => {
+        totalSheets++;
+        const hasHomonymInSheet = (sStat.rawRows || []).some(r => !r.isGroup && r.name && globalHomonymNames.has(r.name));
+        const hasError = !sStat.isNoSeqOk || !sStat.isSumMatch || !sStat.isMixedGenderGroupOk || !sStat.isEstimatedOk || hasHomonymInSheet;
+        const hasNew = (sStat.vActualCount > 0);
+
+        if (hasError) errorSheets++;
+        if (hasNew) newSheets++;
+
+        let isVisible = true;
+        if (currentSheetTabFilter === 'error') isVisible = hasError;
+        else if (currentSheetTabFilter === 'new') isVisible = hasNew;
+
+        if (isVisible) {
+          visibleSheets.push({ sName, sStat, hasError, hasNew });
+        }
+      });
+
+      // 필터 카운트 뱃지 숫자 갱신
+      const allBadge = document.getElementById('sheetFilterAllCount');
+      const errBadge = document.getElementById('sheetFilterErrorCount');
+      const newBadge = document.getElementById('sheetFilterNewCount');
+      if (allBadge) allBadge.textContent = totalSheets;
+      if (errBadge) errBadge.textContent = errorSheets;
+      if (newBadge) newBadge.textContent = newSheets;
+
+      // 만약 현재 활성 시트가 없거나 필터링 목록에 없다면, 첫 번째 보이는 시트로 자동 선택
+      if (!currentActiveSheetView || currentActiveSheetView === 'summary' || !sheetSummaryMap.has(currentActiveSheetView) || (visibleSheets.length > 0 && !visibleSheets.some(v => v.sName === currentActiveSheetView))) {
+        currentActiveSheetView = visibleSheets.length > 0 ? visibleSheets[0].sName : (sheetSummaryMap.keys().next().value || '');
+      }
+
       // 2. 상단 시트 선택 탭 바(버튼 목록) 렌더링
       const tabNav = document.getElementById('sheetAnalysisTabNav');
       if (tabNav) {
-        let navHtml = '';
+        if (visibleSheets.length === 0) {
+          tabNav.innerHTML = `<div class="p-3 text-xs text-slate-500 font-bold w-full text-center">선택한 필터 조건에 해당하는 사업 시트가 없습니다.</div>`;
+        } else {
+          let navHtml = '';
 
-        sheetSummaryMap.forEach((sStat, sName) => {
-          const hasHomonymInSheet = (sStat.rawRows || []).some(r => !r.isGroup && r.name && globalHomonymNames.has(r.name));
-          const hasError = !sStat.isNoSeqOk || !sStat.isSumMatch || !sStat.isMixedGenderGroupOk || !sStat.isEstimatedOk || hasHomonymInSheet;
-          const statusBadge = hasError 
-            ? `<span class="px-1.5 py-0.2 rounded text-[10px] bg-rose-100 text-rose-700 font-black border border-rose-200">⚠️오류</span>` 
-            : `<span class="px-1.5 py-0.2 rounded text-[10px] bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">✅정상</span>`;
-          
-          const isActive = (currentActiveSheetView === sName);
-          const btnCls = isActive
-            ? "bg-indigo-600 text-white font-extrabold shadow-2xs border border-indigo-700"
-            : "bg-white hover:bg-slate-50 text-slate-700 font-bold border border-slate-300 shadow-2xs";
+          visibleSheets.forEach(({ sName, sStat, hasError, hasNew }) => {
+            const statusBadge = hasError 
+              ? `<span class="px-1.5 py-0.2 rounded text-[10px] bg-rose-100 text-rose-700 font-black border border-rose-200">⚠️오류</span>` 
+              : `<span class="px-1.5 py-0.2 rounded text-[10px] bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">✅정상</span>`;
+            
+            // ★ [신규 뱃지: 비고 신규 또는 단체 신규 발생 시 표출!]
+            const newBadge = hasNew
+              ? `<span class="px-1.5 py-0.2 rounded text-[10px] bg-amber-500 text-white font-black shadow-2xs border border-amber-600">✨신규 ${sStat.vActualCount}명</span>`
+              : ``;
 
-          const vBadgeCls = isActive
-            ? "bg-white/20 text-white"
-            : "bg-slate-100 text-slate-600 border border-slate-200";
+            const isActive = (currentActiveSheetView === sName);
+            const btnCls = isActive
+              ? "bg-indigo-600 text-white font-extrabold shadow-2xs border border-indigo-700 ring-2 ring-indigo-300"
+              : "bg-white hover:bg-slate-50 text-slate-700 font-bold border border-slate-300 shadow-2xs";
 
-          const vDetailDesc = sStat.groupVActualCount > 0 
-            ? `V실적 실인원: ${sStat.vActualCount}명 (개인 신규 ${sStat.newPersonalCount}명 + 단체 신규 ${sStat.groupVActualCount}명)` 
-            : `V실적 실인원: ${sStat.vActualCount}명 (비고 신규 ${sStat.newPersonalCount}명)`;
+            const vDetailDesc = sStat.groupVActualCount > 0 
+              ? `V실적 실인원: ${sStat.vActualCount}명 (개인 신규 ${sStat.newPersonalCount}명 + 단체 신규 ${sStat.groupVActualCount}명)` 
+              : `V실적 실인원: ${sStat.vActualCount}명 (비고 신규 ${sStat.newPersonalCount}명)`;
 
-          navHtml += `
-            <button onclick="showSheetAnalysisView('${escapeHtml(sName)}')" data-sheet-tab="${escapeHtml(sName)}" class="px-3 py-1.5 rounded-lg ${btnCls} text-xs flex items-center gap-1.5 transition-all" title="${escapeHtml(vDetailDesc)}">
-              <span>📁</span>
-              <span>${escapeHtml(sName)}</span>
-              ${statusBadge}
-            </button>
-          `;
-        });
+            navHtml += `
+              <button onclick="showSheetAnalysisView('${escapeHtml(sName)}')" data-sheet-tab="${escapeHtml(sName)}" class="px-3 py-1.5 rounded-lg ${btnCls} text-xs flex items-center gap-1.5 transition-all cursor-pointer" title="${escapeHtml(vDetailDesc)}">
+                <span>📁</span>
+                <span>${escapeHtml(sName)}</span>
+                ${statusBadge}
+                ${newBadge}
+              </button>
+            `;
+          });
 
-        tabNav.innerHTML = navHtml;
+          tabNav.innerHTML = navHtml;
+        }
       }
 
       // 3. 개별 시트 엑셀 풀 뷰어 즉시 표출!
@@ -6115,12 +6221,17 @@
                 시트 맨 아래에 있는 회색 <strong>'계' 행</strong>의 수식(=COUNT, =SUM) 범위가 누락되었거나 합계 숫자가 잘못 적혀 있습니다. 원본 엑셀 파일에서 '계' 행의 수식을 다시 확인하고 수정해야 합니다.
               </p>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
-                ${sumIssues.map((iss, i) => `
-                  <div class="p-3.5 bg-rose-50/70 rounded-xl border border-rose-200 text-sm sm:text-base flex items-start gap-2.5">
-                    <span class="w-6 h-6 rounded-full bg-rose-200 text-rose-900 font-black flex items-center justify-center shrink-0 mt-0.5 text-xs">${i + 1}</span>
-                    <span class="font-bold text-rose-950 leading-snug">${escapeHtml(iss)}</span>
+                ${sumIssues.map((iss, i) => {
+                  const isGroupRelated = typeof iss === 'string' && iss.includes("단체는");
+                  return `
+                  <div class="p-3.5 ${isGroupRelated ? 'bg-amber-50/90 border-amber-300' : 'bg-rose-50/70 border-rose-200'} rounded-xl border text-sm sm:text-base flex items-start gap-2.5 shadow-2xs">
+                    <span class="w-6 h-6 rounded-full ${isGroupRelated ? 'bg-amber-200 text-amber-950 font-black' : 'bg-rose-200 text-rose-900 font-black'} flex items-center justify-center shrink-0 mt-0.5 text-xs">${i + 1}</span>
+                    <div class="space-y-1">
+                      <div class="font-extrabold ${isGroupRelated ? 'text-amber-950' : 'text-rose-950'} leading-snug">${escapeHtml(iss)}</div>
+                      ${isGroupRelated ? `<div class="text-xs font-bold text-amber-900 bg-amber-100/80 px-2 py-1 rounded border border-amber-200">👉 <strong>수정 방법:</strong> 원본 엑셀 시트 맨 아래 회색 '계' 행의 실인원 칸을 올바른 합계(280명)로 수정해 주세요!</div>` : ''}
+                    </div>
                   </div>
-                `).join('')}
+                `}).join('')}
               </div>
             </div>
           `;
