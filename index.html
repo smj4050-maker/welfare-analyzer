@@ -1557,12 +1557,13 @@
         if (!regNo && !name) continue;
 
         // 헤더 및 소제목 행 건너뛰기
-        if (
-          regNo.includes("접수번호") || name.includes("성명") ||
-          regNo.includes("프로그램") || name.includes("프로그램") ||
-          name.includes("이용자 현황") || name.includes("이용자현황") ||
-          no === "번" || no.includes("번호")
-        ) {
+        // 주의: 접수번호(regNo)에 '대여프로그램' 등 사업명이 적혀있는 실제 이용자 행이 있으므로 regNo.includes("프로그램")으로 건너뛰면 안 됨!
+        const isHeaderRow = regNo.includes("접수번호") || name.includes("성명") || no === "번" || no.includes("번호");
+        const isTitleRow = name.includes("이용자 현황") || name.includes("이용자현황") || regNo.includes("이용자 현황") || regNo.includes("이용자현황") ||
+          (/\d{4}\s*년/.test(regNo + " " + name) && (regNo.includes("프로그램") || name.includes("프로그램"))) ||
+          (name.includes("프로그램") && !parseInt(r[3]) && !parseInt(r[4]) && !parseInt(r[5]));
+
+        if (isHeaderRow || isTitleRow) {
           continue;
         }
 
@@ -2152,40 +2153,88 @@
       return String(a.regNo || "").localeCompare(String(b.regNo || ""), 'ko');
     }
 
-    // ★ [동명이인 순차 순번 자동 배정 엔진: 1순위는 원래성명 유지, 2순위=이름2, 3순위=이름3...]
+    // ★ [복지관 실무 원칙 반영 동명이인 정밀 판별 및 배정 엔진]
+    // 1. 접수번호에 숫자가 포함된 사람은 복지관 등록 이용자이며, 전산에 이미 '박세진', '박세진3' 처럼 등록되어 있으므로
+    //    등록자들끼리 이미 성명이 서로 다르다면(박세진 vs 박세진3) 중간 번호(박세진2)가 없더라도 절대로 오류가 아님!
+    // 2. 비등록자(접수번호가 한글/기호/미기재)가 동명이인으로 들어왔을 때만, 이미 사용 중인 등록자 번호(박세진, 박세진3)를 피해
+    //    비어있는 번호('박세진2', '박세진4'...)로 성명 구분을 요구함!
     function assignHomonymIssues(nameToUsersMap) {
       const allExistingNames = new Set(aggregatedUsers.map(u => u.name));
 
       nameToUsersMap.forEach((userList, baseName) => {
         if (userList.length <= 1) return;
 
-        // ★ [사용자 요청 4] 접수번호에 숫자가 들어간 사람이 무조건 1순위! 그 다음 나이순!
-        userList.sort((a, b) => compareHomonymRank(a, b, baseName));
+        // 1. 정식 등록자(접수번호에 숫자 포함)와 비등록자 분리
+        const officialUsers = userList.filter(u => isOfficialPersonalRegNo(u.regNo));
+        const nonOfficialUsers = userList.filter(u => !isOfficialPersonalRegNo(u.regNo));
 
-        // 1순위 대상자 (userList[0]): 원래 성명 유지!
-        const rank1User = userList[0];
-        rank1User.recommendedHomonymName = baseName;
+        // 정식 등록자들의 성명 빈도수 검사
+        const officialNameCounts = new Map();
+        officialUsers.forEach(u => {
+          officialNameCounts.set(u.name, (officialNameCounts.get(u.name) || 0) + 1);
+        });
 
-        const assignedNamesForGroup = new Set();
-        assignedNamesForGroup.add(baseName);
+        const occupiedNames = new Set();
+        const usersNeedingRename = [];
+        const validUsers = [];
 
+        // 2. 정식 등록자 처리:
+        // 성명이 서로 다른 등록자(예: '박세진' 1명, '박세진3' 1명)는 전산 등록 성명이므로 그대로 100% 인정 (오류 없음!)
+        officialUsers.forEach(u => {
+          if (officialNameCounts.get(u.name) === 1) {
+            u.recommendedHomonymName = u.name;
+            occupiedNames.add(u.name);
+            validUsers.push(u);
+          }
+        });
+
+        // 정식 등록자 중 성명까지 완전히 동일한 경우(실제 중복 기재 오류):
+        const duplicateOfficialNames = new Set();
+        officialNameCounts.forEach((cnt, name) => {
+          if (cnt > 1) duplicateOfficialNames.add(name);
+        });
+
+        duplicateOfficialNames.forEach(dupName => {
+          const sameNameOfficials = officialUsers.filter(u => u.name === dupName);
+          sameNameOfficials.sort((a, b) => compareHomonymRank(a, b, baseName));
+          // 1순위는 원래 성명 유지
+          sameNameOfficials[0].recommendedHomonymName = dupName;
+          occupiedNames.add(dupName);
+          validUsers.push(sameNameOfficials[0]);
+          // 2순위부터는 변경 대상
+          for (let i = 1; i < sameNameOfficials.length; i++) {
+            usersNeedingRename.push(sameNameOfficials[i]);
+          }
+        });
+
+        // 3. 비등록자 처리:
+        // 접수번호가 글자/미기재인 비등록자가 이미 등록자나 다른 사람이 쓰고 있는 이름과 겹치면 변경 대상
+        nonOfficialUsers.forEach(u => {
+          if (occupiedNames.has(u.name) || userList.filter(x => x.name === u.name).length > 1) {
+            usersNeedingRename.push(u);
+          } else {
+            u.recommendedHomonymName = u.name;
+            occupiedNames.add(u.name);
+            validUsers.push(u);
+          }
+        });
+
+        // 변경 대상자들에게 비어있는 번호(baseName, baseName2, baseName3, baseName4...) 순차 배정
+        let nextSuffix = 1;
         const otherUsersInfo = [];
 
-        // 2순위(userList[1] -> baseName2), 3순위(userList[2] -> baseName3)... 순차 배정!
-        for (let i = 1; i < userList.length; i++) {
-          const u = userList[i];
-          let suffixNum = i + 1; // 2, 3, 4...
-          let candidateName = `${baseName}${suffixNum}`;
+        usersNeedingRename.forEach(u => {
+          let candidateName = (nextSuffix === 1) ? baseName : `${baseName}${nextSuffix}`;
 
           while (
-            assignedNamesForGroup.has(candidateName) || 
+            occupiedNames.has(candidateName) ||
             (allExistingNames.has(candidateName) && !userList.some(x => x.name === candidateName))
           ) {
-            suffixNum++;
-            candidateName = `${baseName}${suffixNum}`;
+            nextSuffix++;
+            candidateName = (nextSuffix === 1) ? baseName : `${baseName}${nextSuffix}`;
           }
 
-          assignedNamesForGroup.add(candidateName);
+          occupiedNames.add(candidateName);
           u.recommendedHomonymName = candidateName;
 
           const uDesc = `${u.regNo || '접수번호미기재'}${u.age ? ', ' + u.age + '세' : ''}${u.gender ? ' ' + u.gender : ''}`;
@@ -2195,35 +2244,39 @@
             type: "error",
             code: "HOMONYM_NOT_DISTINGUISHED",
             title: `🚨 동명이인 성명 수정 필요 ('${u.name}' ➔ '${candidateName}')`,
-            desc: `동일 성명 '${baseName}' 이용자가 총 ${userList.length}명 있습니다. [${rank1User.regNo || '1순위 대상자'}]가 1순위로 성명 '${baseName}'을 유지하므로, 본인(${uDesc})의 성명을 순번에 따라 '${candidateName}'(으)로 변경하여 구분해야 합니다!`,
+            desc: `동일 성명 '${baseName}' 이용자가 여러 명 있습니다. 복지관 전산 등록 이용자 성명과 구분하기 위해 본인(${uDesc})의 성명을 비어있는 순번인 '${candidateName}'(으)로 변경해야 합니다!`,
             sheets: (u.participations || []).map(p => ({
               sheet: p.sheetName,
               row: p.rowIdx,
               val: `성명: '${u.name}' ➔ '${candidateName}'로 수정 필요 (${p.regNo || '접수번호없음'})`
             }))
           });
-        }
+        });
 
-        // 1순위 대상자 안내 등록
-        const othersSummary = otherUsersInfo.map(o => `[${o.desc} ➔ '${o.recName}']`).join(', ');
-        const homonymSheets = [];
-        otherUsersInfo.forEach(o => {
-          (o.user.participations || []).forEach(p => {
-            homonymSheets.push({
-              sheet: p.sheetName,
-              row: p.rowIdx,
-              val: `상대방 '${p.name}' ➔ '${o.recName}'로 수정 필요 (${p.regNo || '접수번호없음'})`
+        // 4. 변경 대상자가 있는 경우에만 정상 등록자에게 안내 표시
+        if (usersNeedingRename.length > 0 && validUsers.length > 0) {
+          const othersSummary = otherUsersInfo.map(o => `[${o.desc} ➔ '${o.recName}']`).join(', ');
+          const homonymSheets = [];
+          otherUsersInfo.forEach(o => {
+            (o.user.participations || []).forEach(p => {
+              homonymSheets.push({
+                sheet: p.sheetName,
+                row: p.rowIdx,
+                val: `상대방 '${p.name}' ➔ '${o.recName}'로 수정 필요 (${p.regNo || '접수번호없음'})`
+              });
             });
           });
-        });
 
-        rank1User.issues.push({
-          type: "warning",
-          code: "HOMONYM_CHECK",
-          title: `⚠️ 동명이인 구분 안내 (총 ${userList.length}명 중 1순위: 성명 '${baseName}' 유지)`,
-          desc: `동일 성명 '${baseName}' 이용자가 총 ${userList.length}명 있습니다. 접수번호에 정식 번호가 입력된 본인(${rank1User.regNo || '1순위'})이 1순위로 성명 '${baseName}'을 유지하며, 다른 동명이인 대상자들은 ${othersSummary}으로 각각 순차 변경되어야 합니다.`,
-          sheets: homonymSheets
-        });
+          // 대표 1순위 대상자에게만 안내 등록
+          const primeUser = validUsers[0];
+          primeUser.issues.push({
+            type: "warning",
+            code: "HOMONYM_CHECK",
+            title: `⚠️ 동명이인 구분 안내 (성명 '${primeUser.name}' 유지)`,
+            desc: `동일 성명 계열('${baseName}') 이용자가 있습니다. 복지관 정식 등록자인 본인(${primeUser.regNo || '등록자'})은 성명 '${primeUser.name}'을 그대로 유지하며, 다른 대상자는 ${othersSummary}(으)로 구분됩니다.`,
+            sheets: homonymSheets
+          });
+        }
       });
     }
 
@@ -4907,6 +4960,7 @@
       ];
 
       if (tableType === 'actual') {
+        const individualUsers = aggregatedUsers.filter(u => !u.isGroup);
         // ★ [사용자 핵심 요구: 단체 실인원 썸(SUM) 전원 합산 반영]
         // - 개인 이용자: 성별/장애유형 1명씩 카운트
         // - 접수번호 '단체' 이용자: 단체 6명이면 실인원 합계에도 6으로 전원 썸 더함!
