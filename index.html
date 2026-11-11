@@ -2116,11 +2116,11 @@
       });
     }
 
-    // ★ [사용자 요청 4] 접수번호 칸에 숫자가 포함되어 있는지 검사 (숫자 1자리 이상 포함 시 정식 등록자로 최우선 1순위!)
+    // ★ [복지관 등록 접수번호 판별 엔진 - 숫자 포함 및 '양육' 등 복지관 등록번호는 100% 등록자로 인정]
     function hasNumberInRegNo(reg) {
       if (!reg) return false;
       const s = String(reg).trim();
-      if (!s || s === "-" || s === "미기재" || s.includes("자원봉사") || s.includes("봉사자") || s.includes("한국석유") || s.includes("단체")) {
+      if (!s || s === "-" || s === "미기재" || s.includes("미등록") || s.includes("자원봉사") || s.includes("봉사자") || s.includes("한국석유") || s.includes("단체") || s.includes("가족") || s.includes(" 모") || s.endsWith("모")) {
         return false;
       }
       return /\d/.test(s);
@@ -2168,72 +2168,69 @@
     }
 
     // ★ [복지관 실무 원칙 반영 동명이인 정밀 판별 및 배정 엔진]
-    // 1. 접수번호에 숫자가 포함된 사람은 복지관 등록 이용자이며, 전산에 이미 '박세진', '박세진3' 처럼 등록되어 있으므로
-    //    등록자들끼리 이미 성명이 서로 다르다면(박세진 vs 박세진3) 중간 번호(박세진2)가 없더라도 절대로 오류가 아님!
-    // 2. 비등록자(접수번호가 한글/기호/미기재)가 동명이인으로 들어왔을 때만, 이미 사용 중인 등록자 번호(박세진, 박세진3)를 피해
-    //    비어있는 번호('박세진2', '박세진4'...)로 성명 구분을 요구함!
+    // 1. 접수번호에 숫자가 포함된 사람('양육68-251107' 등)은 복지관 전산 등록 이용자이며,
+    //    전산 등록자는 이미 본인 성명(예: '김민서11', '박세진', '박세진3')이 확정되어 있으므로 절대로 성명 수정 오류 대상이 아님!
+    // 2. 비등록자(접수번호 미등록, 자원봉사자, 가족 등)가 동명이인으로 들어왔을 때만, 이미 사용 중인 번호를 피해
+    //    비어있는 번호('송민정 ➔ 송민정2' 등)로 성명 구분을 요구함!
     function assignHomonymIssues(nameToUsersMap) {
       const allExistingNames = new Set(aggregatedUsers.map(u => u.name));
 
       nameToUsersMap.forEach((userList, baseName) => {
         if (userList.length <= 1) return;
 
-        // 1. 정식 등록자(접수번호에 숫자 포함)와 비등록자 분리
+        // 1. 정식 등록자(접수번호에 숫자 포함, 양육XX-XXXXXX 등)와 비등록자(접수번호 미등록, 가족 등) 분리
         const officialUsers = userList.filter(u => isOfficialPersonalRegNo(u.regNo));
         const nonOfficialUsers = userList.filter(u => !isOfficialPersonalRegNo(u.regNo));
-
-        // 정식 등록자들의 성명 빈도수 검사
-        const officialNameCounts = new Map();
-        officialUsers.forEach(u => {
-          officialNameCounts.set(u.name, (officialNameCounts.get(u.name) || 0) + 1);
-        });
 
         const occupiedNames = new Set();
         const usersNeedingRename = [];
         const validUsers = [];
 
         // 2. 정식 등록자 처리:
-        // 성명이 서로 다른 등록자(예: '박세진' 1명, '박세진3' 1명)는 전산 등록 성명이므로 그대로 100% 인정 (오류 없음!)
+        // 복지관 등록번호를 가진 이용자는 전산 등록 성명이므로 100% 본인 성명 유지 (오류 없음!)
         officialUsers.forEach(u => {
-          if (officialNameCounts.get(u.name) === 1) {
-            u.recommendedHomonymName = u.name;
-            occupiedNames.add(u.name);
-            validUsers.push(u);
-          }
-        });
-
-        // 정식 등록자 중 성명까지 완전히 동일한 경우(실제 중복 기재 오류):
-        const duplicateOfficialNames = new Set();
-        officialNameCounts.forEach((cnt, name) => {
-          if (cnt > 1) duplicateOfficialNames.add(name);
-        });
-
-        duplicateOfficialNames.forEach(dupName => {
-          const sameNameOfficials = officialUsers.filter(u => u.name === dupName);
-          sameNameOfficials.sort((a, b) => compareHomonymRank(a, b, baseName));
-          // 1순위는 원래 성명 유지
-          sameNameOfficials[0].recommendedHomonymName = dupName;
-          occupiedNames.add(dupName);
-          validUsers.push(sameNameOfficials[0]);
-          // 2순위부터는 변경 대상
-          for (let i = 1; i < sameNameOfficials.length; i++) {
-            usersNeedingRename.push(sameNameOfficials[i]);
-          }
+          u.recommendedHomonymName = u.name;
+          occupiedNames.add(u.name);
+          validUsers.push(u);
         });
 
         // 3. 비등록자 처리:
-        // 접수번호가 글자/미기재인 비등록자가 이미 등록자나 다른 사람이 쓰고 있는 이름과 겹치면 변경 대상
+        // 성명별로 그룹화하여, 이미 등록자가 쓰고 있거나 비등록자끼리 겹치는 경우 순위 결정
+        const nonOfficialGroups = new Map();
         nonOfficialUsers.forEach(u => {
-          if (occupiedNames.has(u.name) || userList.filter(x => x.name === u.name).length > 1) {
-            usersNeedingRename.push(u);
+          if (!nonOfficialGroups.has(u.name)) nonOfficialGroups.set(u.name, []);
+          nonOfficialGroups.get(u.name).push(u);
+        });
+
+        nonOfficialGroups.forEach((groupUsers, name) => {
+          // 이미 등록자가 이 이름을 쓰고 있는 경우 -> 이 비등록자들은 전원 새 번호로 변경 대상
+          if (occupiedNames.has(name)) {
+            groupUsers.forEach(u => usersNeedingRename.push(u));
           } else {
-            u.recommendedHomonymName = u.name;
-            occupiedNames.add(u.name);
-            validUsers.push(u);
+            // 등록자가 이 이름을 안 쓰고 있는 경우:
+            if (groupUsers.length === 1) {
+              // 1명뿐이면 본인 성명 그대로 인정!
+              const u = groupUsers[0];
+              u.recommendedHomonymName = u.name;
+              occupiedNames.add(u.name);
+              validUsers.push(u);
+            } else {
+              // 비등록자끼리 동명이인인 경우 (예: '송민정' 2명):
+              // 나이순/참여순 정렬하여 1순위는 원래 이름('송민정') 유지, 2순위부터 변경 대상('송민정2' 등)!
+              groupUsers.sort((a, b) => compareHomonymRank(a, b, baseName));
+              const prime = groupUsers[0];
+              prime.recommendedHomonymName = prime.name;
+              occupiedNames.add(prime.name);
+              validUsers.push(prime);
+
+              for (let i = 1; i < groupUsers.length; i++) {
+                usersNeedingRename.push(groupUsers[i]);
+              }
+            }
           }
         });
 
-        // 변경 대상자들에게 비어있는 번호(baseName, baseName2, baseName3, baseName4...) 순차 배정
+        // 변경 대상 비등록자들에게 비어있는 번호(baseName, baseName2, baseName3, baseName4...) 순차 배정
         let nextSuffix = 1;
         const otherUsersInfo = [];
 
