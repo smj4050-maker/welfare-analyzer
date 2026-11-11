@@ -2165,11 +2165,39 @@
       return String(a.regNo || "").localeCompare(String(b.regNo || ""), 'ko');
     }
 
+    // ★ 성명 동일 시 동일인(접수번호 오기입 의심) 판별 헬퍼: 성별, 나이, 장애정도, 장애유형 일치 여부
+    function isSamePersonDemographics(u1, u2) {
+      if (!u1 || !u2) return false;
+
+      // 1. 성별 일치 (둘 다 성별이 있고 일치해야 함)
+      const g1 = u1.gender || (u1.maleCount > 0 ? "남" : (u1.femaleCount > 0 ? "여" : ""));
+      const g2 = u2.gender || (u2.maleCount > 0 ? "남" : (u2.femaleCount > 0 ? "여" : ""));
+      if (!g1 || !g2 || g1 !== g2) return false;
+
+      // 2. 나이 일치 (둘 다 유효한 나이가 있고 일치해야 함)
+      const a1 = (u1.age !== null && u1.age !== undefined && u1.age >= 0) ? u1.age : null;
+      const a2 = (u2.age !== null && u2.age !== undefined && u2.age >= 0) ? u2.age : null;
+      if (a1 === null || a2 === null || a1 !== a2) return false;
+
+      // 3. 장애정도 일치 (중증/경증)
+      const s1 = u1.severity || (u1.sevActual > 0 || u1.sevAccum > 0 ? "중증" : (u1.mildActual > 0 || u1.mildAccum > 0 ? "경증" : ""));
+      const s2 = u2.severity || (u2.sevActual > 0 || u2.sevAccum > 0 ? "중증" : (u2.mildActual > 0 || u2.mildAccum > 0 ? "경증" : ""));
+      if (s1 && s2 && s1 !== s2) return false;
+
+      // 4. 장애유형 일치
+      const d1 = DISABILITY_TYPES.filter(d => (u1.disabilityCounts[d] || 0) > 0).sort().join(',');
+      const d2 = DISABILITY_TYPES.filter(d => (u2.disabilityCounts[d] || 0) > 0).sort().join(',');
+      if (!d1 || !d2 || d1 !== d2) return false;
+
+      return true;
+    }
+
     // ★ [복지관 실무 원칙 반영 동명이인 정밀 판별 및 배정 엔진]
-    // 1. 성명이 서로 다른 경우(예: '김민서6' vs '김민서11', '박세진' vs '박세진3')는 이미 전산/실무상 구분된 것이므로 오류 아님(정상)!
-    // 2. 접수번호가 서로 다른데 성명이 완전히 동일한 경우(예: '김민서11' 2명, '이수경' 3명):
-    //    1순위(연인원/나이 많은 사람, 예: 김민서11 18회, 김초롱 모 이수경 50세)는 원래 성명 그대로 100% 정상 인정! (오류 없음)
-    //    2순위 이후의 다른 이용자들만 비어있는 다음 순번(김민서12, 이수경2, 이수경3...)으로 수정하도록 오류 표시!
+    // 1. 성명이 서로 다른 경우(예: '김민서6' vs '김민서11', '박세진' vs '박세진3')는 이미 구분된 것이므로 오류 아님(정상)!
+    // 2. 성명이 완전히 같은데 성별, 나이, 중증, 장애유형까지 모두 일치하는 경우(예: '양육29-240322 박수민4' vs '양육28-240322 박수민4'):
+    //    ➔ 동명이인이 아니라 동일 이용자인데 접수번호를 오기입한 것이므로, 성명을 바꾸라고 하지 않고 둘 다 "접수번호 확인 필요" 오류로 공지!
+    // 3. 접수번호가 다른 진짜 동명이인인 경우(예: 뇌병변 김민서11 vs 지체 김민서11, 이수경 3명 등):
+    //    ➔ 1순위는 원래 성명 그대로 정상 유지, 2순위 이후만 비어있는 다음 번호(김민서12, 이수경2, 이수경3...)로 수정하도록 오류 표시!
     function assignHomonymIssues(nameToUsersMap) {
       const allExistingNames = new Set(aggregatedUsers.map(u => u.name));
 
@@ -2203,17 +2231,77 @@
             return;
           }
 
-          // 2) 접수번호가 다른데 동일한 성명을 쓰는 이용자가 2명 이상인 경우 (예: '김민서11' 2명, '이수경' 3명)
-          // ➔ 정밀 순위(등록자우선 > 나이순 > 연인원 > 작성순) 비교 후 1순위만 원래 성명 유지, 나머지는 수정 대상!
-          groupUsers.sort((a, b) => compareHomonymRank(a, b, baseName));
+          // 2) 2명 이상인데 성별, 나이, 중증, 장애유형까지 모두 같아 동일 인물로 추정되는 경우 (예: 89번 양육29 박수민4 vs 90번 양육28 박수민4)
+          // ➔ 박수민5로 변경하지 않고, 둘 다 "접수번호 확인 필요" 오류로 공지!
+          const samePersonClusters = [];
+          const matchedIndices = new Set();
 
-          const prime = groupUsers[0];
-          prime.recommendedHomonymName = prime.name;
-          occupiedNames.add(prime.name);
-          validUsers.push(prime);
+          for (let i = 0; i < groupUsers.length; i++) {
+            if (matchedIndices.has(i)) continue;
+            const cluster = [groupUsers[i]];
+            for (let j = i + 1; j < groupUsers.length; j++) {
+              if (matchedIndices.has(j)) continue;
+              if (isSamePersonDemographics(groupUsers[i], groupUsers[j])) {
+                cluster.push(groupUsers[j]);
+                matchedIndices.add(j);
+              }
+            }
+            if (cluster.length > 1) {
+              matchedIndices.add(i);
+              samePersonClusters.push(cluster);
+            }
+          }
 
-          for (let i = 1; i < groupUsers.length; i++) {
-            usersNeedingRename.push(groupUsers[i]);
+          const samePersonSet = new Set();
+          samePersonClusters.forEach(cluster => {
+            const regList = cluster.map(u => `'${u.regNo || '미기재'}'`).join(' vs ');
+            const clusterSheets = [];
+            cluster.forEach(u => {
+              samePersonSet.add(u);
+              u.recommendedHomonymName = u.name; // 성명은 원래 성명 그대로 유지!
+              occupiedNames.add(u.name);
+              u.hasSamePersonRegNoMismatch = true; // 접수번호 칸에 빨간 테두리 표시
+
+              (u.participations || []).forEach(p => {
+                clusterSheets.push({
+                  sheet: p.sheetName,
+                  row: p.rowIdx,
+                  val: `[${p.sheetName} ${p.rowIdx}행] 접수번호: '${p.regNo || '미기재'}' (성명 '${u.name}', ${u.gender} ${u.age}세 ${u.severity || ''} ${u.mainDisability})`
+                });
+              });
+            });
+
+            // 클러스터에 속한 모든 이용자에게 접수번호 확인 필요 오류 공지!
+            cluster.forEach(u => {
+              u.issues.push({
+                type: "error",
+                code: "SAME_PERSON_REGNO_MISMATCH",
+                title: `🚨 동일 이용자 접수번호 불일치 (확인 필요: ${regList})`,
+                desc: `성명('${u.name}'), 성별('${u.gender}'), 연령(${u.age}세), 장애정도('${u.severity || '중증'}'), 장애유형('${u.mainDisability}')이 모두 일치하는 동일 이용자이나, 사업 시트마다 접수번호가 서로 다르게(${regList}) 기재되어 있습니다. 성명 변경 대상이 아니며, 사업관리시스템(전산)에서 정확한 접수번호를 확인하여 두 시트의 접수번호를 동일하게 수정해야 합니다!`,
+                sheets: clusterSheets
+              });
+            });
+          });
+
+          // 3) 동일 인물 클러스터에 속하지 않은 '진짜 동명이인'들만 성명 순번 배정!
+          const trueHomonymUsers = groupUsers.filter(u => !samePersonSet.has(u));
+
+          if (trueHomonymUsers.length === 1) {
+            const u = trueHomonymUsers[0];
+            u.recommendedHomonymName = u.name;
+            occupiedNames.add(u.name);
+            validUsers.push(u);
+          } else if (trueHomonymUsers.length > 1) {
+            trueHomonymUsers.sort((a, b) => compareHomonymRank(a, b, baseName));
+
+            const prime = trueHomonymUsers[0];
+            prime.recommendedHomonymName = prime.name;
+            occupiedNames.add(prime.name);
+            validUsers.push(prime);
+
+            for (let i = 1; i < trueHomonymUsers.length; i++) {
+              usersNeedingRename.push(trueHomonymUsers[i]);
+            }
           }
         });
 
@@ -3400,6 +3488,9 @@
           regPlaceholder = "누락";
           regContent = "";
           regTitle = "🚨 개인 이용자의 접수번호가 누락되었습니다!";
+        } else if (user.hasSamePersonRegNoMismatch || user.issues.some(i => i.code === 'SAME_PERSON_REGNO_MISMATCH')) {
+          regCls = "cell-error-highlight font-black text-red-900";
+          regTitle = "🚨 동일 이용자 접수번호 불일치: 사업 시트마다 접수번호가 서로 다르게 입력되었습니다 (전산 확인 필요)";
         } else if (user.isGroup) {
           regCls = "font-bold text-slate-800";
         }
