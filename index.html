@@ -1591,8 +1591,6 @@
           else gender = "단체";
         }
 
-        const rawAgeStr = String(r[5] !== undefined && r[5] !== null ? r[5] : "").trim();
-        const hasValidAge = rawAgeStr !== "" && !isNaN(parseInt(rawAgeStr)) && parseInt(rawAgeStr) >= 0;
         const age = hasValidAge ? parseInt(rawAgeStr) : null;
 
         let severity = "";
