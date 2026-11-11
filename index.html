@@ -1556,19 +1556,27 @@
         // 빈 행 건너뛰기
         if (!regNo && !name) continue;
 
-        // 헤더 및 소제목 행 건너뛰기
-        // 주의: 접수번호(regNo)에 '대여프로그램' 등 사업명이 적혀있는 실제 이용자 행이 있으므로 regNo.includes("프로그램")으로 건너뛰면 안 됨!
-        const isHeaderRow = regNo.includes("접수번호") || name.includes("성명") || no === "번" || no.includes("번호");
-        const isTitleRow = name.includes("이용자 현황") || name.includes("이용자현황") || regNo.includes("이용자 현황") || regNo.includes("이용자현황") ||
-          (/\d{4}\s*년/.test(regNo + " " + name) && (regNo.includes("프로그램") || name.includes("프로그램"))) ||
-          (name.includes("프로그램") && !parseInt(r[3]) && !parseInt(r[4]) && !parseInt(r[5]));
-
-        if (isHeaderRow || isTitleRow) {
-          continue;
-        }
-
         const maleCount = parseInt(r[3]) || 0;
         const femaleCount = parseInt(r[4]) || 0;
+        const rawAgeStr = String(r[5] !== undefined && r[5] !== null ? r[5] : "").trim();
+        const hasValidAge = rawAgeStr !== "" && !isNaN(parseInt(rawAgeStr)) && parseInt(rawAgeStr) >= 0;
+        const hasUserData = (maleCount > 0 || femaleCount > 0 || hasValidAge || (!isNaN(parseInt(no)) && parseInt(no) > 0));
+
+        // 헤더 및 소제목 행 건너뛰기
+        // 주의: 접수번호(regNo)에 '대여프로그램' 등 사업명이 적혀있는 실제 이용자 행(강인원, 김우정 등)은 데이터(순번, 성별, 나이)가 있으므로 절대 타이틀로 건너뛰면 안 됨!
+        if (!hasUserData) {
+          const isHeaderRow = regNo.includes("접수번호") || name.includes("성명") || no === "번" || no.includes("번호");
+          const isTitleRow = name.includes("이용자 현황") || name.includes("이용자현황") || regNo.includes("이용자 현황") || regNo.includes("이용자현황") ||
+            /\d{4}\s*년/.test(regNo + " " + name);
+          if (isHeaderRow || isTitleRow) {
+            continue;
+          }
+        } else {
+          // 데이터가 있더라도 성명/접수번호 열 헤더 명칭 행은 건너뜀
+          if (regNo.includes("접수번호") || name.includes("성명") || no === "번") {
+            continue;
+          }
+        }
         const isGroup = regNo.includes("단체") || name.includes("단체") || (maleCount > 1 || femaleCount > 1);
         const groupCount = isGroup ? ((maleCount + femaleCount) || 1) : 0;
         const missingGroupTag = (maleCount > 1 || femaleCount > 1) && !regNo.includes("단체");
@@ -4960,7 +4968,7 @@
       ];
 
       if (tableType === 'actual') {
-        const individualUsers = aggregatedUsers.filter(u => !u.isGroup);
+        const individualUsers = (aggregatedUsers || []).filter(u => !u.isGroup);
         // ★ [사용자 핵심 요구: 단체 실인원 썸(SUM) 전원 합산 반영]
         // - 개인 이용자: 성별/장애유형 1명씩 카운트
         // - 접수번호 '단체' 이용자: 단체 6명이면 실인원 합계에도 6으로 전원 썸 더함!
@@ -4968,7 +4976,8 @@
         let femaleCount = 0;
         let unknownGenderCount = 0;
 
-        aggregatedUsers.forEach(u => {
+        (aggregatedUsers || []).forEach(u => {
+          if (!u) return;
           if (u.isGroup) {
             maleCount += (u.maleCell || u.maleCount || 0);
             femaleCount += (u.femaleCell || u.femaleCount || 0);
@@ -4988,8 +4997,9 @@
         let grandDisCount = 0;
         DISABILITY_TYPES.forEach(d => {
           let count = 0;
-          aggregatedUsers.forEach(u => {
-            const val = u.disabilityCounts[d] || 0;
+          (aggregatedUsers || []).forEach(u => {
+            if (!u) return;
+            const val = (u.disabilityCounts && u.disabilityCounts[d]) || 0;
             if (val > 0) {
               if (u.isGroup) {
                 const groupPersons = (u.maleCell || u.maleCount || 0) + (u.femaleCell || u.femaleCount || 0) || val;
@@ -5011,10 +5021,11 @@
           const counts = {};
           let rTotal = 0;
           DISABILITY_TYPES.forEach(d => counts[d] = 0);
-          aggregatedUsers.forEach(u => {
+          (aggregatedUsers || []).forEach(u => {
+            if (!u) return;
             if (filterFn(u)) {
               DISABILITY_TYPES.forEach(d => {
-                const val = u.disabilityCounts[d] || 0;
+                const val = (u.disabilityCounts && u.disabilityCounts[d]) || 0;
                 if (val > 0) {
                   if (u.isGroup) {
                     const groupPersons = (u.maleCell || u.maleCount || 0) + (u.femaleCell || u.femaleCount || 0) || val;
@@ -5032,13 +5043,13 @@
         }
 
         const ageRowStats = ageGroups.map(g => {
-          const s = getRowStats(u => g.match(u.age));
+          const s = getRowStats(u => g.match(u ? u.age : null));
           return { label: g.label, ...s };
         });
-        const ageRowTotalSum = ageRowStats.reduce((s, it) => s + it.rTotal, 0);
+        const ageRowTotalSum = ageRowStats.reduce((s, it) => s + (it.rTotal || 0), 0);
         const ageColTotals = {};
         DISABILITY_TYPES.forEach(d => {
-          ageColTotals[d] = ageRowStats.reduce((s, it) => s + (it.counts[d] || 0), 0);
+          ageColTotals[d] = ageRowStats.reduce((s, it) => s + ((it.counts && it.counts[d]) || 0), 0);
         });
         const ageUncheckedRow = ageRowStats.find(it => it.label === "미확인");
         const ageUncheckedCount = ageUncheckedRow ? ageUncheckedRow.rTotal : 0;
@@ -5053,15 +5064,15 @@
           const s = getRowStats(u => g.match(u));
           return { label: g.label, isError: g.isError, ...s };
         });
-        const sevRowTotalSum = sevRowStats.reduce((s, it) => s + it.rTotal, 0);
+        const sevRowTotalSum = sevRowStats.reduce((s, it) => s + (it.rTotal || 0), 0);
         const sevColTotals = {};
         DISABILITY_TYPES.forEach(d => {
-          sevColTotals[d] = sevRowStats.reduce((s, it) => s + (it.counts[d] || 0), 0);
+          sevColTotals[d] = sevRowStats.reduce((s, it) => s + ((it.counts && it.counts[d]) || 0), 0);
         });
 
         const isActualTotalsMatch = (grandDisCount === genderSumWithDup && grandDisCount === ageRowTotalSum && grandDisCount === sevRowTotalSum);
-        const isAgeColsMatch = DISABILITY_TYPES.every(d => ageColTotals[d] === disTotals[d]);
-        const isSevColsMatch = DISABILITY_TYPES.every(d => sevColTotals[d] === disTotals[d]);
+        const isAgeColsMatch = DISABILITY_TYPES.every(d => (ageColTotals[d] || 0) === (disTotals[d] || 0));
+        const isSevColsMatch = DISABILITY_TYPES.every(d => (sevColTotals[d] || 0) === (disTotals[d] || 0));
         const isAllMatch = isActualTotalsMatch && isAgeColsMatch && isSevColsMatch && (unknownGenderCount === 0);
 
         const issues = [];
@@ -5095,24 +5106,25 @@
           const counts = {};
           let rTotal = 0;
           DISABILITY_TYPES.forEach(d => counts[d] = 0);
-          aggregatedUsers.forEach(u => {
+          (aggregatedUsers || []).forEach(u => {
+            if (!u) return;
             const discVal = (u[field] || 0);
             if (discVal > 0) {
-              const activeDis = DISABILITY_TYPES.filter(d => (u.disabilityCounts[d] || 0) > 0);
+              const activeDis = DISABILITY_TYPES.filter(d => ((u.disabilityCounts && u.disabilityCounts[d]) || 0) > 0);
               const addCount = u.isGroup ? discVal : 1;
               if (activeDis.length === 0) {
                 const fb = (u.mainDisability && DISABILITY_TYPES.includes(u.mainDisability)) ? u.mainDisability : "비장애인";
-                counts[fb] += addCount;
+                counts[fb] = (counts[fb] || 0) + addCount;
                 rTotal += addCount;
               } else {
                 activeDis.forEach(d => {
-                  counts[d] += addCount;
+                  counts[d] = (counts[d] || 0) + addCount;
                   rTotal += addCount;
                 });
               }
             }
           });
-          rTotal = DISABILITY_TYPES.reduce((sum, d) => sum + counts[d], 0);
+          rTotal = DISABILITY_TYPES.reduce((sum, d) => sum + (counts[d] || 0), 0);
           return { rTotal, counts };
         };
 
@@ -5121,10 +5133,10 @@
           { label: "차상위", ...getDiscRowStats('nearActual') },
           { label: "기타", ...getDiscRowStats('othActual') }
         ];
-        const discRowTotalSum = discRowStats.reduce((s, it) => s + it.rTotal, 0);
+        const discRowTotalSum = discRowStats.reduce((s, it) => s + (it.rTotal || 0), 0);
         const discColTotals = {};
         DISABILITY_TYPES.forEach(d => {
-          discColTotals[d] = discRowStats.reduce((s, it) => s + (it.counts[d] || 0), 0);
+          discColTotals[d] = discRowStats.reduce((s, it) => s + ((it.counts && it.counts[d]) || 0), 0);
         });
 
         return {
@@ -5402,10 +5414,15 @@
       const container = document.getElementById('actualStatRenderArea');
       if (!container) return;
 
-      const val = getStatTableValidation('actual');
+      try {
+        const val = getStatTableValidation('actual');
+        if (!val) {
+          container.innerHTML = '<div class="p-8 text-center text-slate-400 font-bold">실인원 통계표 데이터를 계산할 수 없습니다.</div>';
+          return;
+        }
 
-      // 1. 상단 실시간 무결성 검증 안내 배너
-      const isClean = (val.isAllMatch && val.grandTotalIssues === 0 && val.ageUncheckedCount === 0 && val.sevUnclassifiedCount === 0);
+        // 1. 상단 실시간 무결성 검증 안내 배너
+        const isClean = (val.isAllMatch && (val.grandTotalIssues || 0) === 0 && (val.ageUncheckedCount || 0) === 0 && (val.sevUnclassifiedCount || 0) === 0);
       const bannerCls = isClean ? 'bg-emerald-50 border-emerald-300 text-emerald-950' : 'bg-rose-50 border-rose-300 shadow-sm text-rose-950';
       const icon = isClean ? '🟢' : '🚨';
       const title = isClean 
@@ -5563,6 +5580,19 @@
       `;
 
       container.innerHTML = html;
+      } catch (statErr) {
+        console.error("renderVisualActualStatTable 렌더링 오류:", statErr);
+        container.innerHTML = `
+          <div class="p-6 bg-rose-50 border-2 border-rose-300 rounded-xl text-rose-900 shadow-sm m-4 space-y-3">
+            <div class="text-base font-black flex items-center gap-2">
+              <span class="text-xl">🚨</span>
+              <span>실인원 통계표 렌더링 중 오류가 발생했습니다.</span>
+            </div>
+            <p class="text-xs text-rose-700 font-medium">오류 내역: ${escapeHtml(statErr.message || String(statErr))}</p>
+            <pre class="p-3 bg-white border border-rose-200 rounded-lg text-xs font-mono text-rose-800 overflow-x-auto whitespace-pre-wrap">${escapeHtml(statErr.stack || '')}</pre>
+          </div>
+        `;
+      }
     }
 
     function renderVisualAccumStatTable() {
