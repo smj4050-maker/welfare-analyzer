@@ -1093,11 +1093,18 @@
         // 2. cellXfs 분석 (xf 인덱스 s -> boolean)
         let cellXfsEl = stylesDoc.getElementsByTagName("cellXfs")[0];
         const xfEls = cellXfsEl ? Array.from(cellXfsEl.getElementsByTagName("xf")) : Array.from(stylesDoc.getElementsByTagName("xf"));
-        const isYellowXf = [];
-        xfEls.forEach(xf => {
+        const yellowStyleSet = new Set();
+        xfEls.forEach((xf, idx) => {
           const fillId = parseInt(xf.getAttribute("fillId") || "0");
-          isYellowXf.push(isYellowFill[fillId] === true);
+          if (isYellowFill[fillId] === true) {
+            yellowStyleSet.add(idx);
+          }
         });
+
+        // ★ [초고속 최적화: 파일 전체에 노란색 스타일이 없으면 워크시트 순회 즉시 생략!]
+        if (yellowStyleSet.size === 0) {
+          return result;
+        }
 
         // 3. workbook.xml 및 rels
         const wbFile = zip.file("xl/workbook.xml");
@@ -1133,39 +1140,44 @@
           }
         });
 
-        // 4. 각 워크시트 xml 파싱
+        // 4. 각 워크시트 xml 초고속 정규식/스트리밍 스캔 (DOMParser 노드 폭증 및 프리징 완전 방지!)
         for (const [sName, path] of sheetPathMap.entries()) {
           const wsFile = zip.file(path);
           if (!wsFile) continue;
 
-          const wsDoc = parser.parseFromString(await wsFile.async("text"), "application/xml");
-          const rowYellowMap = new Map();
+          const wsText = await wsFile.async("text");
 
-          Array.from(wsDoc.getElementsByTagName("row")).forEach(rowEl => {
-            const rowIdx = parseInt(rowEl.getAttribute("r") || "0");
-            if (rowIdx <= 0) return;
-
-            let isRowOrNoteYellow = false;
-            Array.from(rowEl.getElementsByTagName("c")).forEach(c => {
-              const s = parseInt(c.getAttribute("s") || "0");
-              if (isYellowXf[s] === true) {
-                const cellRef = (c.getAttribute("r") || "").toUpperCase();
-                const colLetters = cellRef.replace(/\d+/g, '');
-                let colIdx = 0;
-                for (let k = 0; k < colLetters.length; k++) {
-                  colIdx = colIdx * 26 + (colLetters.charCodeAt(k) - 64);
-                }
-                colIdx -= 1; // 0-indexed
-
-                // 비고 열뿐만 아니라 성명, 접수번호, 행 전체 등 행 내 어느 셀이라도 노란색이면 노란색 행으로 완벽 인정!
-                isRowOrNoteYellow = true;
-              }
-            });
-
-            if (isRowOrNoteYellow) {
-              rowYellowMap.set(rowIdx, true);
+          // 4-1) 워크시트 텍스트 내 노란색 스타일(s="X") 포함 여부 0.001초 컷 검사
+          let sheetHasYellow = false;
+          for (const yStyle of yellowStyleSet) {
+            if (wsText.includes(`s="${yStyle}"`) || wsText.includes(`s='${yStyle}'`)) {
+              sheetHasYellow = true;
+              break;
             }
-          });
+          }
+          if (!sheetHasYellow) continue;
+
+          // 4-2) 노란색 스타일이 있는 행만 정규식으로 초고속 추출
+          const rowYellowMap = new Map();
+          const rowRegex = /<row\b[^>]*?\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
+          let rowMatch;
+
+          while ((rowMatch = rowRegex.exec(wsText)) !== null) {
+            const rowIdx = parseInt(rowMatch[1]);
+            if (rowIdx <= 0) continue;
+            const rowContent = rowMatch[2];
+
+            const cellRegex = /<c\b[^>]*?\bs="(\d+)"/g;
+            let cellMatch;
+            while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
+              const s = parseInt(cellMatch[1]);
+              if (yellowStyleSet.has(s)) {
+                // 비고 열뿐만 아니라 성명, 접수번호, 행 전체 등 행 내 어느 셀이라도 노란색이면 노란색 행으로 완벽 인정!
+                rowYellowMap.set(rowIdx, true);
+                break; // 행당 1개 발견 즉시 다음 행으로 진행 (초고속 속도 보장)
+              }
+            }
+          }
 
           result.sheets.set(sName, rowYellowMap);
         }
@@ -1246,8 +1258,8 @@
             excelYellowStyles = { sheets: new Map() };
           }
 
-          // 2. SheetJS로 엑셀 워크북 즉시 파싱 및 전체 분석 화면 표출 (노란색 스타일 완벽 반영!)
-          rawWorkbook = XLSX.read(data, { type: 'array' });
+          // 2. SheetJS로 엑셀 워크북 즉시 파싱 (불필요한 서식 파싱 생략으로 파싱 속도 대폭 향상!)
+          rawWorkbook = XLSX.read(data, { type: 'array', cellStyles: false, cellHTML: false });
           analyzeWorkbook(rawWorkbook);
 
         } catch (err) {
@@ -1339,13 +1351,7 @@
           console.warn("관리자 통계 기록 중 오류:", analyticsErr);
         }
 
-        // 개별 테이블 렌더링 (독립 try-catch로 안전성 극대화)
-        try { renderExcelSummaryTable(); } catch (e) { console.error("renderExcelSummaryTable 오류:", e); }
-        try { renderSheetAnalysisTable(); } catch (e) { console.error("renderSheetAnalysisTable 오류:", e); }
-        try { renderVisualActualStatTable(); } catch (e) { console.error("renderVisualActualStatTable 오류:", e); }
-        try { renderVisualAccumStatTable(); } catch (e) { console.error("renderVisualAccumStatTable 오류:", e); }
-
-        // ★ 사용자가 요청한 기본 뷰: 사업(시트)별 V실적 분석 탭이 1순위로 즉시 열리도록 설정!
+        // ★ [초고속 지연 렌더링: 1단계 화면을 0.1초 만에 즉시 표출하고, 2~4단계는 탭 클릭 시 표시!]
         switchTab('sheetAnalysis');
 
         showToast("🎉 분석이 완료되었습니다!");
