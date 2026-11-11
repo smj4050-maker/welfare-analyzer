@@ -1563,17 +1563,19 @@
         const hasUserData = (maleCount > 0 || femaleCount > 0 || hasValidAge || (!isNaN(parseInt(no)) && parseInt(no) > 0));
 
         // 헤더 및 소제목 행 건너뛰기
-        // 주의: 접수번호(regNo)에 '대여프로그램' 등 사업명이 적혀있는 실제 이용자 행(강인원, 김우정 등)은 데이터(순번, 성별, 나이)가 있으므로 절대 타이틀로 건너뛰면 안 됨!
+        // 주의: 접수번호(regNo)에 '대여프로그램' 등 사업명이 적혀있거나 '접수번호 미등록'으로 적힌 실제 이용자 행(여하준, 장세준 등)은 데이터가 있으므로 절대 타이틀/헤더로 건너뛰면 안 됨!
         if (!hasUserData) {
-          const isHeaderRow = regNo.includes("접수번호") || name.includes("성명") || no === "번" || no.includes("번호");
+          const isHeaderRow = (regNo === "접수번호" || (regNo.includes("접수번호") && !regNo.includes("미등록"))) || name.includes("성명") || no === "번" || no.includes("번호");
           const isTitleRow = name.includes("이용자 현황") || name.includes("이용자현황") || regNo.includes("이용자 현황") || regNo.includes("이용자현황") ||
             /\d{4}\s*년/.test(regNo + " " + name);
           if (isHeaderRow || isTitleRow) {
             continue;
           }
         } else {
-          // 데이터가 있더라도 성명/접수번호 열 헤더 명칭 행은 건너뜀
-          if (regNo.includes("접수번호") || name.includes("성명") || no === "번") {
+          // 데이터가 있더라도 순수 열 헤더 명칭 행은 건너뜀
+          // ★ 주의: '접수번호 미등록'은 실제 이용자의 정상 표기이므로 절대로 건너뛰지 않음!
+          const isPureHeader = (regNo === "접수번호" || (regNo.includes("접수번호") && !regNo.includes("미등록"))) && (name.includes("성명") || no === "번" || no === "번호");
+          if (isPureHeader || regNo === "접수번호" || name === "성명" || no === "번") {
             continue;
           }
         }
