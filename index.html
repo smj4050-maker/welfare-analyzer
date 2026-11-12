@@ -57,7 +57,7 @@
     .excel-table th.status-col-header {
       position: sticky !important;
       right: 0 !important;
-      z-index: 25 !important;
+      z-index: 20 !important;
       background-color: #f1f5f9 !important;
       box-shadow: -3px 0 6px rgba(0, 0, 0, 0.08);
       border-left: 2px solid #cbd5e1 !important;
@@ -65,10 +65,20 @@
     .excel-table td.status-col-cell {
       position: sticky !important;
       right: 0 !important;
-      z-index: 15 !important;
+      z-index: 10 !important;
       background-color: #ffffff !important;
       box-shadow: -3px 0 6px rgba(0, 0, 0, 0.08);
       border-left: 2px solid #cbd5e1 !important;
+    }
+
+    /* ★ [사용자 요청] 2단계 통합 총괄 명단 상단 툴바: 스크롤 시 상단 완전 고정 및 본문 투과 원천 차단 */
+    .sticky-summary-toolbar {
+      position: sticky !important;
+      top: 64px !important;
+      z-index: 50 !important;
+      background-color: #f8fafc !important;
+      opacity: 1 !important;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.06) !important;
     }
     .excel-table tbody tr.selected-row td.status-col-cell {
       background-color: #fef9c3 !important;
@@ -458,9 +468,9 @@
         <div class="flex-1 flex flex-col lg:flex-row gap-3 w-full items-start">
           <div id="leftTablePanel" class="flex-1 min-w-0 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-visible transition-all duration-300">
           
-          <!-- ★ [사용자 요청] 스크롤 시 화면 상단(헤더 바로 아래)에 고정되어 함께 따라내려오는 통합 총괄 명단 기능 툴바 -->
-          <div class="sticky top-16 z-25 bg-slate-50/95 backdrop-blur-xs rounded-t-xl border-b border-slate-200 shadow-sm" style="top: 64px;">
-            <div class="p-2.5 flex flex-wrap items-center justify-between gap-2">
+          <!-- ★ [사용자 요청] 스크롤 시 화면 상단에 영구 고정되어 함께 따라내려오는 통합 총괄 명단 기능 툴바 (스크롤 투과 원천 차단) -->
+          <div class="sticky-summary-toolbar rounded-t-xl border-b-2 border-slate-300 shadow-md">
+            <div class="p-2.5 flex flex-wrap items-center justify-between gap-2 bg-slate-100">
               <div class="flex items-center gap-2">
                 <span class="font-black text-slate-900 text-sm">통합 총괄 명단 (직접 수정 가능 ✏️)</span>
                 <span id="filteredCountBadge" class="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700">전체 0명</span>
@@ -540,9 +550,9 @@
             </div>
           </div>
 
-          <div id="excelSummaryTableContainer" class="flex-1 overflow-auto bg-white">
+          <div id="excelSummaryTableContainer" class="flex-1 overflow-auto bg-white" style="max-height: calc(100vh - 195px); min-height: 480px; position: relative;">
             <table id="excelSummaryTable" class="excel-table w-full text-center">
-              <thead class="sticky top-0 z-20 shadow-sm">
+              <thead class="sticky top-0 z-30 shadow-sm bg-slate-100">
                 <tr>
                   <th rowspan="3" class="w-7 min-w-[26px] max-w-[28px]">번호</th>
                   <th rowspan="3" class="w-16 min-w-[52px] max-w-[62px] bg-blue-50/70 text-indigo-900 font-bold">접수번호<br/>(B열 시작)</th>
@@ -3206,23 +3216,6 @@ function doPost(e) {
             }
           }
 
-          // 0-1) 개인 이용자 실인원 1명 초과 검증
-          if (sevMildActual > 1 || discActual > 1) {
-            if (!user.issues.some(i => i.code === "PERSONAL_ACTUAL_COUNT_OVER")) {
-              user.issues.push({
-                type: "error",
-                code: "PERSONAL_ACTUAL_COUNT_OVER",
-                title: "🚨 개인 이용자 실인원 1명 초과 오류",
-                desc: `개인 이용자(${user.name})는 1명이므로 실인원이 1명이어야 하나, ${Math.max(sevMildActual, discActual)}명으로 기재되어 있습니다. 실인원을 1로 수정해 주세요!`,
-                sheets: parts.map(p => ({
-                  sheet: p.sheetName,
-                  row: p.rowIdx,
-                  val: `장애정도 실${(p.rawSevActual || 0) + (p.rawMildActual || 0)}명, 감면 실${(p.rawDiscRecActual || 0) + (p.rawDiscNearActual || 0) + (p.rawDiscOthActual || 0)}명`
-                }))
-              });
-            }
-          }
-
           const sevMildAccum = (user.sevAccum || 0) + (user.mildAccum || 0);
           const discAccum = (user.recAccum || 0) + (user.nearAccum || 0) + (user.othAccum || 0);
 
@@ -3612,8 +3605,6 @@ function doPost(e) {
         const userDiscActSum = (user.recActual || 0) + (user.nearActual || 0) + (user.othActual || 0);
         const hasSevMildActualMismatch = user.issues.some(i => i.code === 'SEV_DISC_ACTUAL_MISMATCH') ||
           (!user.isGroup && userSevMildActSum > 0 && userDiscActSum > 0 && userSevMildActSum !== userDiscActSum);
-        const hasPersonalActualOver = (!user.isGroup && (userSevMildActSum > 1 || userDiscActSum > 1)) ||
-          user.issues.some(i => i.code === 'PERSONAL_ACTUAL_COUNT_OVER');
         const hasConflictGender = (!user.isGroup && (user.maleCell > 0 && user.femaleCell > 0)) ||
           user.issues.some(i => i.code === 'CONFLICT_GENDER_ERROR');
         const hasSevMildAccumMismatch = user.issues.some(i => i.code === 'ACCUM_SEV_DISC_MISMATCH' || i.code === 'SEV_DISC_ACCUM_MISMATCH');
@@ -3740,10 +3731,10 @@ function doPost(e) {
               placeholder: ""
             };
           }
-          if (!isAccum && (hasSevMildActualMismatch || hasPersonalActualOver) && (val !== "" && val !== "0")) {
+          if (!isAccum && hasSevMildActualMismatch && (val !== "" && val !== "0")) {
             return {
               cls: "cell-error-highlight font-black",
-              title: hasPersonalActualOver ? "🚨 개인 이용자 실인원 1명 초과 오류 (실인원은 1이어야 함)" : "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+              title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
               content: val,
               placeholder: ""
             };
@@ -3790,10 +3781,10 @@ function doPost(e) {
               placeholder: "누락"
             };
           }
-          if (!isAccum && (hasSevMildActualMismatch || hasPersonalActualOver) && (val !== "" && val !== "0")) {
+          if (!isAccum && hasSevMildActualMismatch && (val !== "" && val !== "0")) {
             return {
               cls: "cell-error-highlight font-black",
-              title: hasPersonalActualOver ? "🚨 개인 이용자 실인원 1명 초과 오류 (실인원은 1이어야 함)" : "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+              title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
               content: val,
               placeholder: ""
             };
@@ -5068,24 +5059,6 @@ function doPost(e) {
             user.issues = user.issues.filter(i => i.code !== "SEV_DISC_ACTUAL_MISMATCH");
           }
 
-          if (sevMildActual > 1 || discActual > 1) {
-            if (!user.issues.some(i => i.code === "PERSONAL_ACTUAL_COUNT_OVER")) {
-              user.issues.push({
-                type: "error",
-                code: "PERSONAL_ACTUAL_COUNT_OVER",
-                title: "🚨 개인 이용자 실인원 1명 초과 오류",
-                desc: `개인 이용자(${user.name})는 1명이므로 실인원이 1명이어야 하나, ${Math.max(sevMildActual, discActual)}명으로 기재되어 있습니다. 실인원을 1로 수정해 주세요!`,
-                sheets: parts.map(p => ({
-                  sheet: p.sheetName,
-                  row: p.rowIdx,
-                  val: `장애정도 실${(p.rawSevActual || 0) + (p.rawMildActual || 0)}명, 감면 실${(p.rawDiscRecActual || 0) + (p.rawDiscNearActual || 0) + (p.rawDiscOthActual || 0)}명`
-                }))
-              });
-            }
-          } else if (sevMildActual <= 1 && discActual <= 1) {
-            user.issues = user.issues.filter(i => i.code !== "PERSONAL_ACTUAL_COUNT_OVER");
-          }
-
           // 6-2. 장애정도 연인원 vs 감면서비스 연인원 일치 검증
           // 1) 각 사업 시트 원본 단위 검증
           parts.forEach(p => {
@@ -6243,6 +6216,55 @@ function doPost(e) {
       }
     }
 
+    // ★ [2단계 총괄 명단 적발 오류 ➔ 1단계 사업(시트)별 실시간 역반영 헬퍼 엔진]
+    // 황수만(성별 불일치), 김재원(실인원 불일치), 이효빈/조상우(연인원/장애유형 불일치) 등 시트 간 대조 오류를 1단계 시트 화면에 즉각 연결!
+    function getSheetIntegrationErrors(sheetName) {
+      if (!aggregatedUsers || aggregatedUsers.length === 0) return [];
+      const errors = [];
+      aggregatedUsers.forEach(u => {
+        if (!u.issues || u.issues.length === 0) return;
+        const errorIssues = u.issues.filter(i => i.type === 'error');
+        if (errorIssues.length === 0) return;
+
+        // 이 이용자가 해당 사업 시트에 참여했는지 확인
+        const partsInSheet = (u.participations || []).filter(p => p.sheetName === sheetName);
+        if (partsInSheet.length > 0) {
+          errors.push({
+            user: u,
+            errorIssues: errorIssues,
+            participations: partsInSheet
+          });
+        }
+      });
+      return errors;
+    }
+
+    function findRowIntegrationError(sheetName, rowIdx, name) {
+      if (!aggregatedUsers || aggregatedUsers.length === 0) return null;
+      for (const u of aggregatedUsers) {
+        if (!u.issues || u.issues.length === 0) continue;
+        const errorIssues = u.issues.filter(i => i.type === 'error');
+        if (errorIssues.length === 0) continue;
+
+        const matchedPart = (u.participations || []).find(p => p.sheetName === sheetName && (p.rowIdx === rowIdx || (name && p.name === name)));
+        if (matchedPart) {
+          return {
+            user: u,
+            errorIssues: errorIssues,
+            matchedPart: matchedPart,
+            hasGenderErr: errorIssues.some(i => i.code === 'GENDER_MISMATCH'),
+            hasActualErr: errorIssues.some(i => i.code === 'SEV_DISC_ACTUAL_MISMATCH'),
+            hasAccumErr: errorIssues.some(i => i.code === 'ACCUM_SEV_DISC_MISMATCH' || i.code === 'DISABILITY_ACCUM_COUNT_MISMATCH' || i.code === 'SINGLE_DISABILITY_COUNT_MISMATCH'),
+            hasSeverityErr: errorIssues.some(i => i.code === 'SEVERITY_MISMATCH' || i.code === 'MULTI_SEVERITY_CONFLICT' || i.code === 'ESTIMATED_SEVERITY_ERROR'),
+            hasDiscountErr: errorIssues.some(i => i.code === 'DISCOUNT_MISMATCH' || i.code === 'MULTI_DISCOUNT_CONFLICT' || i.code === 'MISSING_SENIOR_OTHER_DISCOUNT'),
+            hasDupNoteErr: errorIssues.some(i => i.code === 'MISSING_DUPLICATE_DISABILITY_NOTE'),
+            hasRegErr: errorIssues.some(i => i.code === 'MISSING_REGNO_ERROR' || i.code === 'HOMONYM_SAME_PERSON_REG_CHECK')
+          };
+        }
+      }
+      return null;
+    }
+
     function renderSheetAnalysisTable() {
       // 전역 동명이인(동일 성명 2명 이상) Set 생성
       const globalHomonymNames = new Set();
@@ -6265,7 +6287,9 @@ function doPost(e) {
       sheetSummaryMap.forEach((sStat, sName) => {
         totalSheets++;
         const hasHomonymInSheet = (sStat.rawRows || []).some(r => !r.isGroup && r.name && globalHomonymNames.has(r.name));
-        const hasError = !sStat.isNoSeqOk || !sStat.isSumMatch || !sStat.isMixedGenderGroupOk || !sStat.isEstimatedOk || hasHomonymInSheet;
+        const integrationErrors = getSheetIntegrationErrors(sName);
+        const hasIntegrationError = (integrationErrors.length > 0);
+        const hasError = !sStat.isNoSeqOk || !sStat.isSumMatch || !sStat.isMixedGenderGroupOk || !sStat.isEstimatedOk || hasHomonymInSheet || hasIntegrationError;
         const hasNew = (sStat.vActualCount > 0);
 
         if (hasError) errorSheets++;
@@ -6276,7 +6300,7 @@ function doPost(e) {
         else if (currentSheetTabFilter === 'new') isVisible = hasNew;
 
         if (isVisible) {
-          visibleSheets.push({ sName, sStat, hasError, hasNew });
+          visibleSheets.push({ sName, sStat, hasError, hasNew, hasIntegrationError, integrationErrors });
         }
       });
 
@@ -6301,10 +6325,15 @@ function doPost(e) {
         } else {
           let navHtml = '';
 
-          visibleSheets.forEach(({ sName, sStat, hasError, hasNew }) => {
-            const statusBadge = hasError 
-              ? `<span class="px-1.5 py-0.2 rounded text-[10px] bg-rose-100 text-rose-700 font-black border border-rose-200">⚠️오류</span>` 
-              : `<span class="px-1.5 py-0.2 rounded text-[10px] bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">✅정상</span>`;
+          visibleSheets.forEach(({ sName, sStat, hasError, hasNew, hasIntegrationError, integrationErrors }) => {
+            let statusBadge = '';
+            if (hasIntegrationError) {
+              statusBadge = `<span class="px-1.5 py-0.2 rounded text-[10px] bg-rose-600 text-white font-black shadow-2xs border border-rose-700 animate-pulse" title="2단계 총괄 대조 시 적발된 불일치 오류 ${integrationErrors.length}건">🚨대조오류 ${integrationErrors.length}건</span>`;
+            } else if (hasError) {
+              statusBadge = `<span class="px-1.5 py-0.2 rounded text-[10px] bg-rose-100 text-rose-700 font-black border border-rose-200">⚠️오류</span>`;
+            } else {
+              statusBadge = `<span class="px-1.5 py-0.2 rounded text-[10px] bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">✅정상</span>`;
+            }
             
             // ★ [신규 뱃지: 비고 신규 또는 단체 신규 발생 시 표출!]
             const newBadge = hasNew
@@ -6397,6 +6426,14 @@ function doPost(e) {
           ? `<button onclick="showSheetAnalysisView('${escapeHtml(sName)}'); setTimeout(() => scrollToSheetIssueGuide('sheet-issue-guide-mixed-gender'), 300);" class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-black animate-pulse cursor-pointer" title="클릭하면 단체 남/여 분리 설명으로 이동">🚨남여분리 ${sStat.mixedGenderGroupIssues.length}건</button>`
           : '';
 
+        // ★ [2단계 총괄 명단에서 대조된 불일치 오류 배지: 황수만, 조상우, 김재원, 이효빈 등]
+        const integrationErrors = getSheetIntegrationErrors(sName);
+        let integrationBadge = '';
+        if (integrationErrors.length > 0) {
+          const namesStr = integrationErrors.map(e => e.user.name).slice(0, 3).join(', ') + (integrationErrors.length > 3 ? ' 외' : '');
+          integrationBadge = `<button onclick="showSheetAnalysisView('${escapeHtml(sName)}'); setTimeout(() => scrollToSheetIssueGuide('sheet-issue-guide-integration'), 300);" class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-black animate-pulse cursor-pointer shadow-2xs" title="2단계 총괄 명단 대조 불일치 (${escapeHtml(namesStr)})">🚨대조오류 ${integrationErrors.length}건</button>`;
+        }
+
         // 비고 '중복' 노란색 채우기 서식 검증 배지 (사용자 요청: 색깔누락 미표시)
         let dupColorBadge = `<span class="text-slate-400 text-xs font-medium">-</span>`;
         if (sStat.dupNoteCount > 0) {
@@ -6419,6 +6456,7 @@ function doPost(e) {
             ${escapeHtml(sName)}
             ${sStat.groupCount > 0 ? `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-slate-200 text-slate-700 font-normal">🏢단체 ${sStat.groupCount}건</span>` : ''}
             ${mixedGenderBadge}
+            ${integrationBadge}
           </td>
           <td class="py-3 text-center bg-amber-50/60">
             ${vBadge}
@@ -6566,6 +6604,7 @@ function doPost(e) {
       const noSeqIssues = (!sStat.isNoSeqOk) ? (sStat.noSeqIssues || []) : [];
       const missingRegIssues = sStat.missingRegIssues || [];
       const seniorMissingIssues = sStat.seniorMissingOtherIssues || [];
+      const integrationErrors = getSheetIntegrationErrors(sheetName);
 
       const totalIssueCount = sumIssues.length + 
                               estimatedIssues.length + 
@@ -6573,7 +6612,8 @@ function doPost(e) {
                               homonyms.length + 
                               (noSeqIssues.length > 0 ? 1 : 0) + 
                               missingRegIssues.length + 
-                              seniorMissingIssues.length;
+                              seniorMissingIssues.length +
+                              integrationErrors.length;
 
       let html = `
         <div class="sticky left-0 w-full mt-4 bg-white border ${totalIssueCount > 0 ? 'border-rose-200 shadow-xs' : 'border-emerald-200 shadow-2xs'} rounded-xl overflow-hidden text-sm">
@@ -6607,6 +6647,54 @@ function doPost(e) {
           </div>
         `;
       } else {
+        // 0. ★ [2단계 총괄 대조 / 시트 간 통합 불일치 오류: 황수만, 조상우, 김재원, 이효빈 등]
+        if (integrationErrors.length > 0) {
+          html += `
+            <div id="sheet-issue-guide-integration" class="scroll-mt-4 bg-white p-5 rounded-2xl border-2 border-rose-500 shadow-sm space-y-3 transition-all duration-300">
+              <div class="flex items-center justify-between pb-2.5 border-b border-rose-100 flex-wrap gap-1.5">
+                <span class="font-black text-lg sm:text-xl text-rose-950 flex items-center gap-2">
+                  <span class="px-2.5 py-1 rounded bg-rose-600 text-white text-sm font-black">시트 간 대조 오류</span>
+                  🚨 시트 간 대조/통합 시 적발된 불일치 오류 (${integrationErrors.length}건)
+                </span>
+                <span class="text-sm font-bold text-rose-800 bg-rose-50 px-3 py-1 rounded-lg border border-rose-200">
+                  다른 사업 시트와 인적사항/연인원/성별 불일치 (2단계 총괄 연동)
+                </span>
+              </div>
+              <p class="text-base sm:text-lg text-slate-800 leading-relaxed font-semibold">
+                이 시트에 참여한 이용자 중 다른 사업 시트와 데이터가 일치하지 않거나, 서식 기준에 맞지 않는 불일치가 적발되었습니다. 아래 대상자를 확인하시고 <strong>[2단계 총괄에서 수정 ➔]</strong> 버튼을 누르시면 해당 이용자의 수정 화면으로 바로 이동합니다.
+              </p>
+              <div class="space-y-3 mt-2">
+                ${integrationErrors.map(it => {
+                  const u = it.user;
+                  const rowNums = it.participations.map(p => p.rowIdx).filter(Boolean);
+                  const rowNumsStr = rowNums.length > 0 ? `${rowNums.join(', ')}행` : '';
+                  return `
+                    <div class="p-4 bg-rose-50/90 rounded-xl border border-rose-300 text-sm sm:text-base space-y-2">
+                      <div class="flex items-center justify-between flex-wrap gap-2">
+                        <div class="flex items-center gap-2">
+                          ${rowNumsStr ? `<span class="px-2.5 py-0.5 rounded bg-rose-200 text-rose-950 font-black">${rowNumsStr}</span>` : ''}
+                          <strong class="text-lg font-black text-slate-900">${escapeHtml(u.name)}</strong>
+                          <span class="text-xs font-mono bg-white px-2 py-0.5 rounded border border-rose-200 text-slate-700 font-bold">${escapeHtml(u.regNo || '접수번호미기재')}</span>
+                          <span class="text-xs text-slate-600">(${u.age !== null && u.age !== undefined ? `${u.age}세` : '?세'}, ${u.gender || '성별미확인'})</span>
+                        </div>
+                        <button onclick="switchTab('validation'); setTimeout(() => selectUserDetail('${u.userKey}'), 250);" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm shadow-xs cursor-pointer transition-all flex items-center gap-1">
+                          <span>✏️ 2단계 총괄에서 수정하기 ➔</span>
+                        </button>
+                      </div>
+                      <div class="space-y-1 pl-2 border-l-2 border-rose-400">
+                        ${it.errorIssues.map(iss => `
+                          <div class="text-xs sm:text-sm text-rose-900 font-bold">
+                            • <strong class="text-rose-950 font-black">${escapeHtml(iss.title)}:</strong> ${escapeHtml(iss.desc)}
+                          </div>
+                        `).join('')}
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }
         // 1. 추정장애 표기 오류
         if (estimatedIssues.length > 0) {
           html += `
@@ -6964,6 +7052,10 @@ function doPost(e) {
 
       // 1. 상단 시트 검증 오류 배지 구성 (오류 있을 때만 버튼, 정상일 땐 깔끔한 정상 뱃지)
       const errorBadges = [];
+      const integrationErrors = getSheetIntegrationErrors(sheetName);
+      if (integrationErrors.length > 0) {
+        errorBadges.push(`<button onclick="scrollToSheetIssueGuide('sheet-issue-guide-integration')" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-black text-xs border border-rose-700 transition-all cursor-pointer shadow-xs animate-pulse" title="2단계 총괄 명단에서 대조된 불일치 오류">🚨 대조오류 ${integrationErrors.length}건 (클릭)</button>`);
+      }
       if (!sStat.isNoSeqOk) {
         errorBadges.push(`<button onclick="scrollToSheetIssueGuide('sheet-issue-guide-no-seq')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-xs border border-rose-200 transition-all cursor-pointer shadow-2xs" title="번호 순서 오류">⚠️ 번호순서 오류</button>`);
       }
@@ -7104,60 +7196,86 @@ function doPost(e) {
         // 6. 단체 남/여 동시 기재 오류 검사 (단체 또는 한 행에 남 > 0 && 여 > 0)
         const isMixedGenderGroupErr = (r.isGroup || (r.maleCount > 0 && r.femaleCount > 0)) && (r.maleCount > 0 && r.femaleCount > 0);
 
+        // ★ [2단계 총괄 대조 시 적발된 통합 오류 검사: 황수만, 조상우, 김재원, 이효빈 등]
+        const intErr = findRowIntegrationError(sheetName, r.rowIdx || (rIdx + 1), r.name);
+        const hasIntErr = !!intErr;
+
         // 7. 동명이인 확인 필요 검사 (동일 성명 이용자 복수 감지)
         const isHomonymErr = !r.isGroup && r.name && homonymNamesInThisSheet.has(r.name);
-        const nameCls = isHomonymErr 
-          ? "text-left pl-2 font-bold bg-purple-100 text-purple-950 border-2 border-purple-500" 
-          : "text-left pl-2 font-bold text-slate-900";
+        
+        let nameCls = "text-left pl-2 font-bold text-slate-900";
+        if (hasIntErr) {
+          nameCls = "text-left pl-2 font-black bg-rose-100 text-rose-950 border-2 border-rose-500 cursor-pointer";
+        } else if (isHomonymErr) {
+          nameCls = "text-left pl-2 font-bold bg-purple-100 text-purple-950 border-2 border-purple-500";
+        }
 
         const noCls = isNoErr ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "text-slate-500 font-mono";
-        const regCls = isRegMissing ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "font-mono";
-        const noteCls = isEstimatedSevErr 
+        const isRegErr = isRegMissing || (hasIntErr && intErr.hasRegErr);
+        const regCls = isRegErr ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "font-mono";
+        
+        const isNoteErr = isEstimatedSevErr || (hasIntErr && intErr.hasDupNoteErr);
+        const noteCls = isNoteErr 
           ? "bg-red-200 text-red-950 font-black border-2 border-red-500" 
           : (r.hasDupInNote ? "bg-yellow-200 text-amber-950 font-bold" : "");
 
-        const sevCls = isEstimatedSevErr ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "";
-        const othCls = isSeniorMissing ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "";
+        const isSevErr = isEstimatedSevErr || (hasIntErr && (intErr.hasSeverityErr || intErr.hasActualErr));
+        const sevCls = isSevErr ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "";
+        
+        const isDiscErr = isSeniorMissing || (hasIntErr && (intErr.hasDiscountErr || intErr.hasActualErr));
+        const othCls = isDiscErr ? "bg-red-200 text-red-950 font-black border-2 border-red-500" : "";
 
-        const maleCellCls = isMixedGenderGroupErr 
+        // 성별 충돌 (황수만 등)
+        const isGenderErr = isMixedGenderGroupErr || (hasIntErr && intErr.hasGenderErr);
+        const maleCellCls = isGenderErr 
           ? "num-col bg-rose-200 text-rose-950 font-black border-2 border-rose-500 animate-pulse" 
           : "num-col";
-        const femaleCellCls = isMixedGenderGroupErr 
+        const femaleCellCls = isGenderErr 
           ? "num-col bg-rose-200 text-rose-950 font-black border-2 border-rose-500 animate-pulse" 
           : "num-col";
-        const genderTitle = isMixedGenderGroupErr 
-          ? `🚨 단체 남/여 동시 기재 오류: 남(${r.maleCount}명)과 여(${r.femaleCount}명)를 한 행에 같이 쓸 수 없습니다. 엑셀 사업 시트에서 남성 1행, 여성 1행으로 분리해야 합니다!` 
-          : "";
+        let genderTitle = "";
+        if (isMixedGenderGroupErr) {
+          genderTitle = `🚨 단체 남/여 동시 기재 오류: 남(${r.maleCount}명)과 여(${r.femaleCount}명)를 한 행에 같이 쓸 수 없습니다. 엑셀 사업 시트에서 남성 1행, 여성 1행으로 분리해야 합니다!`;
+        } else if (hasIntErr && intErr.hasGenderErr) {
+          genderTitle = `🚨 시트 간 성별 불일치 오류: 2단계 총괄 대조 결과, 다른 시트와 성별이 다릅니다. (클릭 시 2단계 총괄 이동)`;
+        }
+
+        // 연인원 오류 셀 하이라이트 (이효빈, 조상우 등)
+        const isAccumErr = (hasIntErr && intErr.hasAccumErr);
+        const accumCellCls = isAccumErr ? "bg-rose-200 text-rose-950 font-black border-2 border-rose-500 animate-pulse" : "";
 
         tableHtml += `
           <tr class="hover:bg-amber-50/40 transition-colors">
             <td ${isNoErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-no-seq\')"' : ''} class="${noCls} ${isNoErr ? 'cursor-pointer hover:opacity-80' : ''}" title="${isNoErr ? '🚨 번호 순서 누락/오류 (클릭하면 하단 설명으로 이동)' : ''}">${r.no || '<span class="text-red-600 font-black">누락</span>'}</td>
             <td ${isRegMissing ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-missing-reg\')"' : ''} class="text-left pl-2 ${regCls} ${isRegMissing ? 'cursor-pointer hover:opacity-80' : ''}" title="${isRegMissing ? '🚨 접수번호 누락 (클릭하면 하단 설명으로 이동)' : ''}">${r.regNo || '<span class="text-red-600 font-black">누락</span>'}</td>
-            <td ${isHomonymErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-homonym\')"' : (isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : '')} class="${nameCls} ${(isHomonymErr || isMixedGenderGroupErr) ? 'cursor-pointer hover:opacity-80' : ''}" title="${isHomonymErr ? '🚨 동일 성명 이용자 복수 감지: 동명이인 구분을 확인하세요! (클릭하면 하단 설명으로 이동)' : ''}">
+            <td ${hasIntErr ? `onclick="switchTab('validation'); setTimeout(() => selectUserDetail('${intErr.user.userKey}'), 250);"` : (isHomonymErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-homonym\')"' : (isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : ''))} class="${nameCls} ${(hasIntErr || isHomonymErr || isMixedGenderGroupErr) ? 'cursor-pointer hover:opacity-80' : ''}" title="${hasIntErr ? `🚨 2단계 총괄 대조 오류 대상자: ${intErr.errorIssues.map(i => i.title).join(' / ')} (클릭하면 2단계 총괄 수정으로 이동)` : (isHomonymErr ? '🚨 동일 성명 이용자 복수 감지: 동명이인 구분을 확인하세요! (클릭하면 하단 설명으로 이동)' : '')}">
               ${escapeHtml(r.name)}
-              ${isHomonymErr ? `<span class="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-purple-600 text-white font-black animate-pulse" title="동일 성명 이용자가 존재합니다. 동명이인 구분을 확인하세요!">동명이인확인</span>` : ''}
+              ${hasIntErr ? `<span class="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-rose-600 text-white font-black animate-pulse" title="2단계 총괄 명단에서 대조된 불일치 오류">🚨대조오류</span>` : ''}
+              ${(!hasIntErr && isHomonymErr) ? `<span class="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-purple-600 text-white font-black animate-pulse" title="동일 성명 이용자가 존재합니다. 동명이인 구분을 확인하세요!">동명이인확인</span>` : ''}
               ${isMixedGenderGroupErr ? `<span class="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-rose-600 text-white font-black animate-pulse" title="단체 남/여 동시 기재 불가 ➔ 남/여 2행으로 분리 필요">남여분리필요</span>` : ''}
             </td>
-            <td ${isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : ''} class="${maleCellCls} ${isMixedGenderGroupErr ? 'cursor-pointer hover:opacity-80' : ''}" title="${genderTitle}">${r.maleCount > 0 ? r.maleCount : ''}</td>
-            <td ${isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : ''} class="${femaleCellCls} ${isMixedGenderGroupErr ? 'cursor-pointer hover:opacity-80' : ''}" title="${genderTitle}">${r.femaleCount > 0 ? r.femaleCount : ''}</td>
+            <td ${isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : (hasIntErr && intErr.hasGenderErr ? `onclick="switchTab('validation'); setTimeout(() => selectUserDetail('${intErr.user.userKey}'), 250);"` : '')} class="${maleCellCls} ${(isMixedGenderGroupErr || (hasIntErr && intErr.hasGenderErr)) ? 'cursor-pointer hover:opacity-80' : ''}" title="${genderTitle}">${r.maleCount > 0 ? r.maleCount : ''}</td>
+            <td ${isMixedGenderGroupErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-mixed-gender\')"' : (hasIntErr && intErr.hasGenderErr ? `onclick="switchTab('validation'); setTimeout(() => selectUserDetail('${intErr.user.userKey}'), 250);"` : '')} class="${femaleCellCls} ${(isMixedGenderGroupErr || (hasIntErr && intErr.hasGenderErr)) ? 'cursor-pointer hover:opacity-80' : ''}" title="${genderTitle}">${r.femaleCount > 0 ? r.femaleCount : ''}</td>
             <td class="num-col">${(r.age !== null && r.age !== undefined && r.age >= 0) ? r.age : (r.isGroup ? '' : '<span class="text-red-600 font-black">누락</span>')}</td>
             <td ${isEstimatedSevErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-estimated\')"' : ''} class="num-col ${sevCls} ${isEstimatedSevErr ? 'cursor-pointer hover:opacity-80' : ''}">${r.rawSevActual > 0 ? r.rawSevActual : ''}</td>
-            <td ${isEstimatedSevErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-estimated\')"' : ''} class="num-col ${sevCls} ${isEstimatedSevErr ? 'cursor-pointer hover:opacity-80' : ''}">${r.rawSevAccum > 0 ? r.rawSevAccum : ''}</td>
-            <td class="num-col">${r.rawMildActual > 0 ? r.rawMildActual : ''}</td>
-            <td class="num-col">${r.rawMildAccum > 0 ? r.rawMildAccum : ''}</td>
-            <td class="num-col">${r.rawDiscRecActual > 0 ? r.rawDiscRecActual : ''}</td>
-            <td class="num-col">${r.rawDiscRecAccum > 0 ? r.rawDiscRecAccum : ''}</td>
-            <td class="num-col">${r.rawDiscNearActual > 0 ? r.rawDiscNearActual : ''}</td>
-            <td class="num-col">${r.rawDiscNearAccum > 0 ? r.rawDiscNearAccum : ''}</td>
+            <td ${isEstimatedSevErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-estimated\')"' : ''} class="num-col ${sevCls || accumCellCls} ${(isEstimatedSevErr || isAccumErr) ? 'cursor-pointer hover:opacity-80' : ''}">${r.rawSevAccum > 0 ? r.rawSevAccum : ''}</td>
+            <td class="num-col ${sevCls}">${r.rawMildActual > 0 ? r.rawMildActual : ''}</td>
+            <td class="num-col ${sevCls || accumCellCls}">${r.rawMildAccum > 0 ? r.rawMildAccum : ''}</td>
+            <td class="num-col ${othCls}">${r.rawDiscRecActual > 0 ? r.rawDiscRecActual : ''}</td>
+            <td class="num-col ${othCls || accumCellCls}">${r.rawDiscRecAccum > 0 ? r.rawDiscRecAccum : ''}</td>
+            <td class="num-col ${othCls}">${r.rawDiscNearActual > 0 ? r.rawDiscNearActual : ''}</td>
+            <td class="num-col ${othCls || accumCellCls}">${r.rawDiscNearAccum > 0 ? r.rawDiscNearAccum : ''}</td>
             <td ${isSeniorMissing ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-senior\')"' : ''} class="num-col ${othCls} ${isSeniorMissing ? 'cursor-pointer hover:opacity-80' : ''}" title="${isSeniorMissing ? '🚨 65세 이상 기타 감면 누락 (클릭하면 하단 설명으로 이동)' : ''}">${r.rawDiscOthActual > 0 ? r.rawDiscOthActual : (isSeniorMissing ? '<span class="text-red-700 font-black">누락</span>' : '')}</td>
-            <td ${isSeniorMissing ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-senior\')"' : ''} class="num-col ${othCls} ${isSeniorMissing ? 'cursor-pointer hover:opacity-80' : ''}" title="${isSeniorMissing ? '🚨 65세 이상 기타 감면 누락 (클릭하면 하단 설명으로 이동)' : ''}">${r.rawDiscOthAccum > 0 ? r.rawDiscOthAccum : (isSeniorMissing ? '<span class="text-red-700 font-black">누락</span>' : '')}</td>
+            <td ${isSeniorMissing ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-senior\')"' : ''} class="num-col ${othCls || accumCellCls} ${isSeniorMissing ? 'cursor-pointer hover:opacity-80' : ''}" title="${isSeniorMissing ? '🚨 65세 이상 기타 감면 누락 (클릭하면 하단 설명으로 이동)' : ''}">${r.rawDiscOthAccum > 0 ? r.rawDiscOthAccum : (isSeniorMissing ? '<span class="text-red-700 font-black">누락</span>' : '')}</td>
             ${DISABILITY_TYPES.map(d => {
               const cnt = r.disabilityCounts[d] || 0;
-              return `<td class="num-col ${cnt > 0 ? 'font-bold text-indigo-700 bg-indigo-50/20' : ''}">${cnt > 0 ? cnt : ''}</td>`;
+              const isDisErr = (isAccumErr && cnt > 0);
+              return `<td class="num-col ${isDisErr ? 'bg-rose-200 text-rose-950 font-black border-2 border-rose-500 animate-pulse' : (cnt > 0 ? 'font-bold text-indigo-700 bg-indigo-50/20' : '')}">${cnt > 0 ? cnt : ''}</td>`;
             }).join('')}
             <td ${isEstimatedSevErr ? 'onclick="scrollToSheetIssueGuide(\'sheet-issue-guide-estimated\')"' : ''} class="text-left pl-2 truncate max-w-[120px] ${noteCls} ${isEstimatedSevErr ? 'cursor-pointer hover:opacity-80' : ''}" title="${isEstimatedSevErr ? '🚨 추정장애 중증 기재 오류: 경증으로 수정 필요 (클릭하면 하단 설명으로 이동)' : escapeHtml(r.note || '')}">
               ${escapeHtml(r.note || '')}
               ${isEstimatedSevErr ? `<span class="ml-1 px-1 py-0.2 rounded text-[9px] bg-red-600 text-white font-black animate-pulse">중증불가</span>` : ''}
+              ${(hasIntErr && intErr.hasDupNoteErr) ? `<span class="ml-1 px-1 py-0.2 rounded text-[9px] bg-rose-600 text-white font-black animate-pulse">중복누락</span>` : ''}
             </td>
           </tr>
         `;
@@ -7516,11 +7634,11 @@ function doPost(e) {
                 </button>
               </div>
             ` : ''}
-            ${(issue.code === 'SEV_DISC_ACTUAL_MISMATCH' || issue.code === 'PERSONAL_ACTUAL_COUNT_OVER') ? `
+            ${issue.code === 'SEV_DISC_ACTUAL_MISMATCH' ? `
               <div class="mt-2 pt-2 border-t border-slate-200/80 flex items-center gap-1.5 flex-wrap justify-end">
                 <span class="text-sm font-bold text-slate-700">⚡ 실인원 맞춤:</span>
-                <button onclick="applyActualCountFix('${user.userKey}')" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm shadow-xs transition-all cursor-pointer" title="실인원을 1명으로 일치시킵니다">
-                  ⚡ 실인원 1명으로 자동 맞춤
+                <button onclick="applyActualCountFix('${user.userKey}')" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm shadow-xs transition-all cursor-pointer" title="실인원 숫자를 일치시킵니다">
+                  ⚡ 실인원 일치 맞춤
                 </button>
               </div>
             ` : ''}
