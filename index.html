@@ -3556,7 +3556,8 @@ function doPost(e) {
         const hasSevConflict = user.issues.some(i => i.code === 'MULTI_SEVERITY_CONFLICT' || i.code === 'SEVERITY_MISMATCH');
         const hasDiscConflict = user.issues.some(i => i.code === 'MULTI_DISCOUNT_CONFLICT' || i.code === 'DISCOUNT_MISMATCH');
         const hasSeniorOtherMissing = user.issues.some(i => i.code === 'MISSING_SENIOR_OTHER_DISCOUNT');
-        const hasSevMildAccumMismatch = user.issues.some(i => i.code === 'ACCUM_SEV_DISC_MISMATCH');
+        const hasSevMildActualMismatch = user.issues.some(i => i.code === 'SEV_DISC_ACTUAL_MISMATCH');
+        const hasSevMildAccumMismatch = user.issues.some(i => i.code === 'ACCUM_SEV_DISC_MISMATCH' || i.code === 'SEV_DISC_ACCUM_MISMATCH');
         const hasDisAccumMismatch = user.issues.some(i => i.code === 'DISABILITY_ACCUM_COUNT_MISMATCH');
         const hasMissingDupNote = user.issues.some(i => i.code === 'MISSING_DUPLICATE_DISABILITY_NOTE');
         const hasEstimatedSeverityError = user.issues.some(i => i.code === 'ESTIMATED_SEVERITY_ERROR');
@@ -3674,6 +3675,14 @@ function doPost(e) {
               placeholder: ""
             };
           }
+          if (!isAccum && hasSevMildActualMismatch && (val !== "" && val !== "0")) {
+            return {
+              cls: "cell-error-highlight",
+              title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+              content: val,
+              placeholder: ""
+            };
+          }
           if (isAccum && hasSevMildAccumMismatch && (val !== "" && val !== "0")) {
             return {
               cls: "cell-error-highlight",
@@ -3714,6 +3723,14 @@ function doPost(e) {
               title: "🚨 65세 이상 이용자 감면서비스 '기타' 누락 오류 (실인원/연인원 입력 필요)",
               content: val, // 순수 값만 유지! 비어있으면 data-placeholder="누락"이 뜸
               placeholder: "누락"
+            };
+          }
+          if (!isAccum && hasSevMildActualMismatch && (val !== "" && val !== "0")) {
+            return {
+              cls: "cell-error-highlight",
+              title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+              content: val,
+              placeholder: ""
             };
           }
           if (isAccum && hasSevMildAccumMismatch && (val !== "" && val !== "0")) {
@@ -4928,23 +4945,87 @@ function doPost(e) {
           }
         }
 
-        // 6. 장애정도/감면서비스 연인원 vs 장애유형 연인원 일치 전수 검증 (최성훈2, 이현우5, 임채성 등)
+        // 6. 장애정도/감면서비스 실인원 및 연인원 일치 전수 검증 (김재원, 최성훈2, 이현우5 등)
         if (!user.isGroup) {
+          // 6-1. 장애정도 실인원 vs 감면서비스 실인원 일치 검증 (★ 김재원 실인원 2 vs 1 불일치 오류 보존!)
+          // 1) 각 사업 시트 원본 단위 검증
+          parts.forEach(p => {
+            const pSevMildActual = (p.rawSevActual || 0) + (p.rawMildActual || 0);
+            const pDiscActual = (p.rawDiscRecActual || 0) + (p.rawDiscNearActual || 0) + (p.rawDiscOthActual || 0);
+            if (pSevMildActual > 0 && pDiscActual > 0 && pSevMildActual !== pDiscActual) {
+              if (!user.issues.some(i => i.code === "SEV_DISC_ACTUAL_MISMATCH")) {
+                user.issues.push({
+                  type: "error",
+                  code: "SEV_DISC_ACTUAL_MISMATCH",
+                  title: "🚨 장애정도-감면서비스 실인원 불일치",
+                  desc: `[${p.sheetName} 시트 ${p.rowIdx}행] 장애정도 실인원 합계(${pSevMildActual})와 감면서비스 실인원 합계(${pDiscActual})가 일치하지 않습니다.`,
+                  sheets: [{ sheet: p.sheetName, row: p.rowIdx, val: `장애정도(${pSevMildActual}) vs 감면(${pDiscActual})` }]
+                });
+              }
+            }
+          });
+
+          // 2) 총괄 집계 단위 실인원 검증 (사용자가 표에서 직접 수정한 경우 반영)
+          const sevMildActual = (user.sevActual || 0) + (user.mildActual || 0);
+          const discActual = (user.recActual || 0) + (user.nearActual || 0) + (user.othActual || 0);
+
+          if (sevMildActual > 0 && discActual > 0 && sevMildActual !== discActual) {
+            if (!user.issues.some(i => i.code === "SEV_DISC_ACTUAL_MISMATCH")) {
+              user.issues.push({
+                type: "error",
+                code: "SEV_DISC_ACTUAL_MISMATCH",
+                title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+                desc: `장애정도 실인원(${sevMildActual}명)과 감면서비스 실인원(${discActual}명)의 숫자가 일치하지 않습니다. 해당 실인원 숫자를 동일하게 맞춰야 합니다!`,
+                sheets: parts.map(p => ({
+                  sheet: p.sheetName,
+                  row: p.rowIdx,
+                  val: `장애정도 실인원: ${(p.rawSevActual || 0) + (p.rawMildActual || 0)}명 vs 감면 실인원: ${(p.rawDiscRecActual || 0) + (p.rawDiscNearActual || 0) + (p.rawDiscOthActual || 0)}명`
+                }))
+              });
+            }
+          } else if (sevMildActual > 0 && discActual > 0 && sevMildActual === discActual) {
+            // 사용자가 표에서 직접 수정하여 숫자를 일치시킨 경우 오류 해소!
+            user.issues = user.issues.filter(i => i.code !== "SEV_DISC_ACTUAL_MISMATCH");
+          }
+
+          // 6-2. 장애정도 연인원 vs 감면서비스 연인원 일치 검증
+          // 1) 각 사업 시트 원본 단위 검증
+          parts.forEach(p => {
+            const pSevMildAccum = (p.rawSevAccum || 0) + (p.rawMildAccum || 0);
+            const pDiscAccum = (p.rawDiscRecAccum || 0) + (p.rawDiscNearAccum || 0) + (p.rawDiscOthAccum || 0);
+            if (pSevMildAccum > 0 && pDiscAccum > 0 && pSevMildAccum !== pDiscAccum) {
+              if (!user.issues.some(i => i.code === "SEV_DISC_ACCUM_MISMATCH")) {
+                user.issues.push({
+                  type: "error",
+                  code: "SEV_DISC_ACCUM_MISMATCH",
+                  title: "🚨 장애정도-감면서비스 연인원 불일치",
+                  desc: `[${p.sheetName} 시트 ${p.rowIdx}행] 장애정도 연인원 합계(${pSevMildAccum})와 감면서비스 연인원 합계(${pDiscAccum})가 일치하지 않습니다.`,
+                  sheets: [{ sheet: p.sheetName, row: p.rowIdx, val: `장애정도(${pSevMildAccum}) vs 감면(${pDiscAccum})` }]
+                });
+              }
+            }
+          });
+
+          // 2) 총괄 집계 단위 연인원 검증
           const sevMildAccum = (user.sevAccum || 0) + (user.mildAccum || 0);
           const discAccum = (user.recAccum || 0) + (user.nearAccum || 0) + (user.othAccum || 0);
 
           if (sevMildAccum > 0 && discAccum > 0 && sevMildAccum !== discAccum) {
-            user.issues.push({
-              type: "error",
-              code: "ACCUM_SEV_DISC_MISMATCH",
-              title: "🚨 장애정도 연인원 vs 감면서비스 연인원 불일치 오류",
-              desc: `장애정도 연인원(${sevMildAccum}회)과 감면서비스 연인원(${discAccum}회)의 숫자가 일치하지 않습니다. 해당 시트에서 연인원 숫자를 동일하게 맞춰야 합니다!`,
-              sheets: parts.map(p => ({
-                sheet: p.sheetName,
-                row: p.rowIdx,
-                val: `장애정도 연인원: ${(p.rawSevAccum || 0) + (p.rawMildAccum || 0)}회 vs 감면 연인원: ${(p.rawDiscRecAccum || 0) + (p.rawDiscNearAccum || 0) + (p.rawDiscOthAccum || 0)}회`
-              }))
-            });
+            if (!user.issues.some(i => i.code === "ACCUM_SEV_DISC_MISMATCH" || i.code === "SEV_DISC_ACCUM_MISMATCH")) {
+              user.issues.push({
+                type: "error",
+                code: "ACCUM_SEV_DISC_MISMATCH",
+                title: "🚨 장애정도 연인원 vs 감면서비스 연인원 불일치 오류",
+                desc: `장애정도 연인원(${sevMildAccum}회)과 감면서비스 연인원(${discAccum}회)의 숫자가 일치하지 않습니다. 해당 시트에서 연인원 숫자를 동일하게 맞춰야 합니다!`,
+                sheets: parts.map(p => ({
+                  sheet: p.sheetName,
+                  row: p.rowIdx,
+                  val: `장애정도 연인원: ${(p.rawSevAccum || 0) + (p.rawMildAccum || 0)}회 vs 감면 연인원: ${(p.rawDiscRecAccum || 0) + (p.rawDiscNearAccum || 0) + (p.rawDiscOthAccum || 0)}회`
+                }))
+              });
+            }
+          } else if (sevMildAccum > 0 && discAccum > 0 && sevMildAccum === discAccum) {
+            user.issues = user.issues.filter(i => i.code !== "ACCUM_SEV_DISC_MISMATCH" && i.code !== "SEV_DISC_ACCUM_MISMATCH");
           }
 
           const baseAccum = sevMildAccum > 0 ? sevMildAccum : (discAccum > 0 ? discAccum : user.totalAccumCount);
