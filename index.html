@@ -2856,6 +2856,21 @@ function doPost(e) {
         user.maleCell = hasMale ? 1 : 0;
         user.femaleCell = hasFemale ? 1 : 0;
 
+        // ★ [개인 이용자 성별 중복 기재 검증 - 황수만 등]
+        if (!user.isGroup && user.maleCell > 0 && user.femaleCell > 0) {
+          user.issues.push({
+            type: "error",
+            code: "CONFLICT_GENDER_ERROR",
+            title: "🚨 개인 성별 중복 기재 오류 (남·여 동시 입력)",
+            desc: `개인 이용자(${user.name})에게 남성과 여성이 동시에 기재되어 있습니다 (남 ${user.maleCell}명, 여 ${user.femaleCell}명). 개인은 1가지 성별만 기재되어야 하므로 올바른 성별 1가지만 남기고 수정해 주세요!`,
+            sheets: parts.map(p => ({
+              sheet: p.sheetName,
+              row: p.rowIdx,
+              val: `남: ${p.maleCount || user.maleCell}명 + 여: ${p.femaleCount || user.femaleCell}명 동시 기재`
+            }))
+          });
+        }
+
         // 장애정도 (중증/경증) - 각 사업 시트의 실/연 수치를 그대로 합산(SUM)!
         let sumSevAct = 0, sumSevAcc = 0;
         let sumMildAct = 0, sumMildAcc = 0;
@@ -3169,8 +3184,45 @@ function doPost(e) {
           });
         }
 
-        // ★ [장애정도/감면서비스 연인원 vs 장애유형 연인원 일치 전수 검증] (최성훈2, 이현우5, 임채성 등)
+        // ★ [장애정도/감면서비스 실인원 및 연인원 일치 전수 검증 - 김재원 등]
         if (!user.isGroup) {
+          // 0) 장애정도 실인원 vs 감면서비스 실인원 자체의 불일치 검증
+          const sevMildActual = (user.sevActual || 0) + (user.mildActual || 0);
+          const discActual = (user.recActual || 0) + (user.nearActual || 0) + (user.othActual || 0);
+
+          if (sevMildActual > 0 && discActual > 0 && sevMildActual !== discActual) {
+            if (!user.issues.some(i => i.code === "SEV_DISC_ACTUAL_MISMATCH")) {
+              user.issues.push({
+                type: "error",
+                code: "SEV_DISC_ACTUAL_MISMATCH",
+                title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+                desc: `장애정도 실인원 합계(${sevMildActual}명)와 감면서비스 실인원 합계(${discActual}명)가 일치하지 않습니다. 해당 시트에서 실인원 숫자를 동일하게 맞춰야 합니다!`,
+                sheets: parts.map(p => ({
+                  sheet: p.sheetName,
+                  row: p.rowIdx,
+                  val: `장애정도 실인원: ${(p.rawSevActual || 0) + (p.rawMildActual || 0)}명 vs 감면 실인원: ${(p.rawDiscRecActual || 0) + (p.rawDiscNearActual || 0) + (p.rawDiscOthActual || 0)}명`
+                }))
+              });
+            }
+          }
+
+          // 0-1) 개인 이용자 실인원 1명 초과 검증
+          if (sevMildActual > 1 || discActual > 1) {
+            if (!user.issues.some(i => i.code === "PERSONAL_ACTUAL_COUNT_OVER")) {
+              user.issues.push({
+                type: "error",
+                code: "PERSONAL_ACTUAL_COUNT_OVER",
+                title: "🚨 개인 이용자 실인원 1명 초과 오류",
+                desc: `개인 이용자(${user.name})는 1명이므로 실인원이 1명이어야 하나, ${Math.max(sevMildActual, discActual)}명으로 기재되어 있습니다. 실인원을 1로 수정해 주세요!`,
+                sheets: parts.map(p => ({
+                  sheet: p.sheetName,
+                  row: p.rowIdx,
+                  val: `장애정도 실${(p.rawSevActual || 0) + (p.rawMildActual || 0)}명, 감면 실${(p.rawDiscRecActual || 0) + (p.rawDiscNearActual || 0) + (p.rawDiscOthActual || 0)}명`
+                }))
+              });
+            }
+          }
+
           const sevMildAccum = (user.sevAccum || 0) + (user.mildAccum || 0);
           const discAccum = (user.recAccum || 0) + (user.nearAccum || 0) + (user.othAccum || 0);
 
@@ -3556,7 +3608,14 @@ function doPost(e) {
         const hasSevConflict = user.issues.some(i => i.code === 'MULTI_SEVERITY_CONFLICT' || i.code === 'SEVERITY_MISMATCH');
         const hasDiscConflict = user.issues.some(i => i.code === 'MULTI_DISCOUNT_CONFLICT' || i.code === 'DISCOUNT_MISMATCH');
         const hasSeniorOtherMissing = user.issues.some(i => i.code === 'MISSING_SENIOR_OTHER_DISCOUNT');
-        const hasSevMildActualMismatch = user.issues.some(i => i.code === 'SEV_DISC_ACTUAL_MISMATCH');
+        const userSevMildActSum = (user.sevActual || 0) + (user.mildActual || 0);
+        const userDiscActSum = (user.recActual || 0) + (user.nearActual || 0) + (user.othActual || 0);
+        const hasSevMildActualMismatch = user.issues.some(i => i.code === 'SEV_DISC_ACTUAL_MISMATCH') ||
+          (!user.isGroup && userSevMildActSum > 0 && userDiscActSum > 0 && userSevMildActSum !== userDiscActSum);
+        const hasPersonalActualOver = (!user.isGroup && (userSevMildActSum > 1 || userDiscActSum > 1)) ||
+          user.issues.some(i => i.code === 'PERSONAL_ACTUAL_COUNT_OVER');
+        const hasConflictGender = (!user.isGroup && (user.maleCell > 0 && user.femaleCell > 0)) ||
+          user.issues.some(i => i.code === 'CONFLICT_GENDER_ERROR');
         const hasSevMildAccumMismatch = user.issues.some(i => i.code === 'ACCUM_SEV_DISC_MISMATCH' || i.code === 'SEV_DISC_ACCUM_MISMATCH');
         const hasDisAccumMismatch = user.issues.some(i => i.code === 'DISABILITY_ACCUM_COUNT_MISMATCH');
         const hasMissingDupNote = user.issues.some(i => i.code === 'MISSING_DUPLICATE_DISABILITY_NOTE');
@@ -3607,7 +3666,7 @@ function doPost(e) {
           nameTitle = `🚨 비등록/자원봉사자 동명이인: 성명을 '${recName}'(으)로 변경하여 구분해야 합니다! (클릭하여 수정)`;
         }
 
-        // 3. 성별 남/여 셀 처리 (단체 남/여 동시 기재 시 빨간 테두리 강조)
+        // 3. 성별 남/여 셀 처리 (단체 남/여 동시 기재 또는 개인 남/여 중복 기재 시 빨간 테두리 강조)
         const maleEdit = getEditInfo('maleCell');
         const femaleEdit = getEditInfo('femaleCell');
         let maleCls = user.isGroup && maleCell ? 'font-bold text-blue-700' : '';
@@ -3618,6 +3677,9 @@ function doPost(e) {
         } else if (isSplitGenderRequired) {
           maleCls = 'cell-error-highlight font-black';
           maleTitle = '🚨 단체 행에서 남성과 여성을 한 행에 동시 기재할 수 없습니다 (행 분리 필요)';
+        } else if (hasConflictGender) {
+          maleCls = 'cell-error-highlight font-black';
+          maleTitle = '🚨 개인 성별 중복 기재 오류: 한 개인 이용자에게 남성과 여성이 동시에 기재되었습니다 (1가지만 선택 필요)';
         }
 
         let femaleCls = user.isGroup && femaleCell ? 'font-bold text-pink-700' : '';
@@ -3628,6 +3690,9 @@ function doPost(e) {
         } else if (isSplitGenderRequired) {
           femaleCls = 'cell-error-highlight font-black';
           femaleTitle = '🚨 단체 행에서 남성과 여성을 한 행에 동시 기재할 수 없습니다 (행 분리 필요)';
+        } else if (hasConflictGender) {
+          femaleCls = 'cell-error-highlight font-black';
+          femaleTitle = '🚨 개인 성별 중복 기재 오류: 한 개인 이용자에게 남성과 여성이 동시에 기재되었습니다 (1가지만 선택 필요)';
         }
 
         // 4. 연령(나이) 셀 처리 (배지 텍스트 없이 CSS placeholder '누락'으로 1타 타이핑!)
@@ -3675,10 +3740,10 @@ function doPost(e) {
               placeholder: ""
             };
           }
-          if (!isAccum && hasSevMildActualMismatch && (val !== "" && val !== "0")) {
+          if (!isAccum && (hasSevMildActualMismatch || hasPersonalActualOver) && (val !== "" && val !== "0")) {
             return {
-              cls: "cell-error-highlight",
-              title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+              cls: "cell-error-highlight font-black",
+              title: hasPersonalActualOver ? "🚨 개인 이용자 실인원 1명 초과 오류 (실인원은 1이어야 함)" : "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
               content: val,
               placeholder: ""
             };
@@ -3725,10 +3790,10 @@ function doPost(e) {
               placeholder: "누락"
             };
           }
-          if (!isAccum && hasSevMildActualMismatch && (val !== "" && val !== "0")) {
+          if (!isAccum && (hasSevMildActualMismatch || hasPersonalActualOver) && (val !== "" && val !== "0")) {
             return {
-              cls: "cell-error-highlight",
-              title: "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
+              cls: "cell-error-highlight font-black",
+              title: hasPersonalActualOver ? "🚨 개인 이용자 실인원 1명 초과 오류 (실인원은 1이어야 함)" : "🚨 장애정도 실인원 vs 감면서비스 실인원 불일치 오류",
               content: val,
               placeholder: ""
             };
@@ -4796,6 +4861,21 @@ function doPost(e) {
             });
           }
         } else {
+          // ★ [개인 이용자 성별 중복 기재 검증 - 황수만 등]
+          if (user.maleCell > 0 && user.femaleCell > 0) {
+            user.issues.push({
+              type: "error",
+              code: "CONFLICT_GENDER_ERROR",
+              title: "🚨 개인 성별 중복 기재 오류 (남·여 동시 입력)",
+              desc: `개인 이용자(${user.name})에게 남성과 여성이 동시에 기재되어 있습니다 (남 ${user.maleCell}명, 여 ${user.femaleCell}명). 개인은 1가지 성별만 기재되어야 하므로 올바른 성별 1가지만 남기고 수정해 주세요!`,
+              sheets: parts.map(p => ({
+                sheet: p.sheetName,
+                row: p.rowIdx,
+                val: `남: ${p.maleCount || user.maleCell}명 + 여: ${p.femaleCount || user.femaleCell}명 동시 기재`
+              }))
+            });
+          }
+
           if (!user.regNo || user.regNo.trim() === "" || user.regNo.trim() === "-" || user.regNo.trim() === "미기재") {
             user.issues.push({
               type: "error",
@@ -4986,6 +5066,24 @@ function doPost(e) {
           } else if (sevMildActual > 0 && discActual > 0 && sevMildActual === discActual) {
             // 사용자가 표에서 직접 수정하여 숫자를 일치시킨 경우 오류 해소!
             user.issues = user.issues.filter(i => i.code !== "SEV_DISC_ACTUAL_MISMATCH");
+          }
+
+          if (sevMildActual > 1 || discActual > 1) {
+            if (!user.issues.some(i => i.code === "PERSONAL_ACTUAL_COUNT_OVER")) {
+              user.issues.push({
+                type: "error",
+                code: "PERSONAL_ACTUAL_COUNT_OVER",
+                title: "🚨 개인 이용자 실인원 1명 초과 오류",
+                desc: `개인 이용자(${user.name})는 1명이므로 실인원이 1명이어야 하나, ${Math.max(sevMildActual, discActual)}명으로 기재되어 있습니다. 실인원을 1로 수정해 주세요!`,
+                sheets: parts.map(p => ({
+                  sheet: p.sheetName,
+                  row: p.rowIdx,
+                  val: `장애정도 실${(p.rawSevActual || 0) + (p.rawMildActual || 0)}명, 감면 실${(p.rawDiscRecActual || 0) + (p.rawDiscNearActual || 0) + (p.rawDiscOthActual || 0)}명`
+                }))
+              });
+            }
+          } else if (sevMildActual <= 1 && discActual <= 1) {
+            user.issues = user.issues.filter(i => i.code !== "PERSONAL_ACTUAL_COUNT_OVER");
           }
 
           // 6-2. 장애정도 연인원 vs 감면서비스 연인원 일치 검증
@@ -7407,6 +7505,25 @@ function doPost(e) {
                 </button>
               </div>
             ` : ''}
+            ${issue.code === 'CONFLICT_GENDER_ERROR' ? `
+              <div class="mt-2 pt-2 border-t border-slate-200/80 flex items-center gap-1.5 flex-wrap justify-end">
+                <span class="text-sm font-bold text-slate-700">⚡ 올바른 성별 1초 지정:</span>
+                <button onclick="applyGenderFix('${user.userKey}', '남')" class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-xs transition-all cursor-pointer">
+                  '남'으로 지정 (여성 지움)
+                </button>
+                <button onclick="applyGenderFix('${user.userKey}', '여')" class="px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-700 text-white font-bold text-sm shadow-xs transition-all cursor-pointer">
+                  '여'로 지정 (남성 지움)
+                </button>
+              </div>
+            ` : ''}
+            ${(issue.code === 'SEV_DISC_ACTUAL_MISMATCH' || issue.code === 'PERSONAL_ACTUAL_COUNT_OVER') ? `
+              <div class="mt-2 pt-2 border-t border-slate-200/80 flex items-center gap-1.5 flex-wrap justify-end">
+                <span class="text-sm font-bold text-slate-700">⚡ 실인원 맞춤:</span>
+                <button onclick="applyActualCountFix('${user.userKey}')" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm shadow-xs transition-all cursor-pointer" title="실인원을 1명으로 일치시킵니다">
+                  ⚡ 실인원 1명으로 자동 맞춤
+                </button>
+              </div>
+            ` : ''}
             ${sheetsList}
           `;
           issuesBox.appendChild(card);
@@ -7524,6 +7641,62 @@ function doPost(e) {
       tableWrapper.innerHTML = tableHtml;
       partsBox.appendChild(tableWrapper);
       panel.appendChild(partsBox);
+    }
+
+    // ★ [개인 성별 중복 오류 원클릭 자동 해결: '남' 또는 '여' 1초 지정]
+    function applyGenderFix(userKey, targetGender) {
+      const user = aggregatedUsers.find(u => u.userKey === userKey);
+      if (!user) return;
+      if (targetGender === "남") {
+        user.maleCell = 1;
+        user.femaleCell = 0;
+        user.gender = "남";
+      } else {
+        user.maleCell = 0;
+        user.femaleCell = 1;
+        user.gender = "여";
+      }
+      user.isEdited = true;
+      if (user.participations) {
+        user.participations.forEach(p => {
+          p.gender = user.gender;
+          p.maleCount = user.maleCell;
+          p.femaleCount = user.femaleCell;
+        });
+      }
+      revalidateAllAggregatedUsers();
+      renderExcelSummaryTable();
+      renderVisualActualStatTable();
+      renderVisualAccumStatTable();
+      selectUserDetail(userKey);
+      showToast(`⚡ '${user.name}' 대상자의 성별이 '${targetGender}'(으)로 즉시 변경되었습니다!`);
+    }
+
+    // ★ [실인원 불일치/1초과 원클릭 자동 해결: 실인원 1명으로 자동 맞춤]
+    function applyActualCountFix(userKey) {
+      const user = aggregatedUsers.find(u => u.userKey === userKey);
+      if (!user) return;
+      if (user.sevActual > 0) user.sevActual = 1;
+      if (user.mildActual > 0) user.mildActual = 1;
+      if (user.recActual > 0) user.recActual = 1;
+      if (user.nearActual > 0) user.nearActual = 1;
+      if (user.othActual > 0) user.othActual = 1;
+      user.isEdited = true;
+      if (user.participations) {
+        user.participations.forEach(p => {
+          if (p.rawSevActual > 0) p.rawSevActual = 1;
+          if (p.rawMildActual > 0) p.rawMildActual = 1;
+          if (p.rawDiscRecActual > 0) p.rawDiscRecActual = 1;
+          if (p.rawDiscNearActual > 0) p.rawDiscNearActual = 1;
+          if (p.rawDiscOthActual > 0) p.rawDiscOthActual = 1;
+        });
+      }
+      revalidateAllAggregatedUsers();
+      renderExcelSummaryTable();
+      renderVisualActualStatTable();
+      renderVisualAccumStatTable();
+      selectUserDetail(userKey);
+      showToast(`⚡ '${user.name}' 대상자의 실인원이 1명으로 일치되었습니다!`);
     }
 
     function copyTableToClipboard(tableId, title) {
